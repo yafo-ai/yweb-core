@@ -24,11 +24,11 @@
 
 
 ```bash
-# 从本地安装（开发模式，推荐使用 compat 确保 IDE 导航正常）
-pip install -e /path/to/yweb-core --config-settings editable_mode=compat
-
 # 从 PyPI 安装
 pip install yweb
+
+# 从本地安装（开发模式，推荐使用 compat 确保 IDE 导航正常）
+pip install -e /path/to/yweb-core --config-settings editable_mode=compat
 ```
 
 > 详细安装说明参见 [README_INSTALL.md](README_INSTALL.md)
