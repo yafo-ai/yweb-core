@@ -31,8 +31,6 @@ pip install yweb
 pip install -e /path/to/yweb-core --config-settings editable_mode=compat
 ```
 
-> 详细安装说明参见 [README_INSTALL.md](README_INSTALL.md)
-
 ---
 
 ## AI 编程助手支持
@@ -671,6 +669,8 @@ yweb-core/
 
 ## 文档
 
+### 核心指南
+
 | 主题 | 链接 |
 |------|------|
 | 快速开始 | [docs/01_quickstart.md](docs/01_quickstart.md) |
@@ -684,7 +684,35 @@ yweb-core/
 | 定时任务 | [docs/09_scheduler_guide.md](docs/09_scheduler_guide.md) |
 | 文件存储 | [docs/10_storage_guide.md](docs/10_storage_guide.md) |
 | 缓存指南 | [docs/11_cache_guide.md](docs/11_cache_guide.md) |
-| ORM 详细文档 | [docs/orm_docs/README.md](docs/orm_docs/README.md) |
+| 模型注册 | [docs/12_model_registry_guide.md](docs/12_model_registry_guide.md) |
+| IP 访问控制 | [docs/13_ip_access_control_guide.md](docs/13_ip_access_control_guide.md) |
+
+### ORM 详细文档
+
+| 主题 | 链接 |
+|------|------|
+| ORM 文档索引 | [docs/orm_docs/README.md](docs/orm_docs/README.md) |
+
+### WebAPI 开发标准
+
+| 主题 | 链接 |
+|------|------|
+| DDD 分层架构 | [docs/webapi_development_standards/ddd-layered-architecture-guide.md](docs/webapi_development_standards/ddd-layered-architecture-guide.md) |
+| API 层设计 | [docs/webapi_development_standards/api_layer_design_guide.md](docs/webapi_development_standards/api_layer_design_guide.md) |
+| 认证流程 | [docs/webapi_development_standards/auth_flow_guide.md](docs/webapi_development_standards/auth_flow_guide.md) |
+| JWT 认证 | [docs/webapi_development_standards/jwt_auth_guide.md](docs/webapi_development_standards/jwt_auth_guide.md) |
+| DTO 响应 | [docs/webapi_development_standards/dto_response_guide.md](docs/webapi_development_standards/dto_response_guide.md) |
+| 模型与服务设计 | [docs/webapi_development_standards/model_and_service_design_guide.md](docs/webapi_development_standards/model_and_service_design_guide.md) |
+| 开发指南 | [docs/webapi_development_standards/development_guide.md](docs/webapi_development_standards/development_guide.md) |
+
+### 设计文档
+
+| 主题 | 链接 |
+|------|------|
+| 定时任务设计 | [docs/scheduler_design.md](docs/scheduler_design.md) |
+| 文件存储设计 | [docs/storage_design.md](docs/storage_design.md) |
+| ORM 事务外提交行为 | [docs/orm_commit_behavior_outside_transaction.md](docs/orm_commit_behavior_outside_transaction.md) |
+| ORM 提交抑制机制 | [docs/orm_commit_suppression_mechanism.md](docs/orm_commit_suppression_mechanism.md) |
 
 ## 依赖
 
