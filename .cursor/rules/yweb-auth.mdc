@@ -1,0 +1,20 @@
+---
+description: 实现用户登录、JWT Token 处理、权限校验、角色管理、组织架构、OAuth 集成等认证授权功能时自动激活。
+globs: yweb-core/yweb/auth/**/*.py, yweb-core/yweb/permission/**/*.py, yweb-core/yweb/organization/**/*.py, **/domain/auth/**/*.py, **/domain/permission/**/*.py, **/api/v1/auth.py, **/api/v1/permission.py, **/api/v1/role.py, **/api/v1/oauth2.py, **/api/v1/sso_*.py
+---
+
+# YWeb 认证授权规范
+
+编写认证、权限、组织架构相关代码时，**必须先阅读对应的 Skill 文档**：
+
+> **Skill 路径**：`.cursor/skills/yweb-auth/SKILL.md`
+
+## 关键规范速查
+
+1. **双 Token 机制**：Access Token（短期）+ Refresh Token（长期）
+2. **认证依赖注入**：使用 `get_current_user` 作为 FastAPI 依赖
+3. **权限检查**：使用权限装饰器或依赖注入，不在 API 层手动检查
+4. **认证服务**：继承 `BaseAuthService` 实现自定义认证
+5. **缓存优化**：认证结果使用 `@cached` 缓存，减少数据库查询
+
+详细流程参阅 `yweb-core/docs/06_auth_guide.md`。

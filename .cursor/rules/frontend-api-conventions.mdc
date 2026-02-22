@@ -1,0 +1,23 @@
+---
+description: 前端 API 封装规范（axios），统一参数、命名与响应处理方式。
+globs: **/frontend/src/api/**/*.js, **/frontend/src/api/**/*.ts
+alwaysApply: false
+---
+
+# Frontend API 封装规范
+
+## 必须遵守
+
+1. 所有后端查询参数放在 `params` 中，避免拼接 query 字符串。
+2. 方法命名语义化（如 `list/get/create/update/delete`），与后端动作对应。
+3. 调用 `api.get/post/put/delete` 时保持统一风格：
+   - GET：`api.get(url, { params })`
+   - POST 带 body：`api.post(url, data)`
+   - POST 无 body：`api.post(url, null, { params })`
+4. 只做请求封装，不在 API 层吞掉异常或写页面逻辑。
+5. 对可选参数使用 `undefined` 过滤，避免传空字符串污染查询。
+
+## 与后端契约协同
+
+- 新增后端接口时，确认其已声明 `response_model`，保证前端能在 `/docs` 看到稳定 Schema。
+- 前端默认按统一响应结构消费：`status/message/msg_details/data`。

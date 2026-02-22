@@ -1,0 +1,11 @@
+---
+description: pytest 测试文件中的类命名规范，避免非测试类被 pytest 误识别。
+alwaysApply: true
+---
+
+# Pytest 类命名规范
+
+- 测试文件中定义的**辅助类、实体类、模型类**等非测试类，**不能以 `Test` 开头**，否则 pytest 会将其误识别为测试类并发出警告
+- 只有**真正的测试类和测试方法**才应以 `Test` / `test_` 开头
+
+> 完整的 pytest 测试编写规范请参阅 Skill：`yweb-testing`

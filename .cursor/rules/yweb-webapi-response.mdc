@@ -1,0 +1,28 @@
+---
+description: yweb WebAPI 响应与文档规范，确保 /docs Schema 正确且可消费。
+globs: **/api/**/*.py, yweb-core/yweb/**/api/**/*.py
+alwaysApply: false
+---
+
+# YWeb WebAPI 响应规范
+
+修改 API 路由前，先阅读：
+- `yweb-core/docs/webapi_development_standards/api_layer_design_guide.md`
+- `yweb-core/docs/webapi_development_standards/dto_response_guide.md`
+
+## 必须遵守
+
+1. 每个接口都要声明 `response_model`，禁止省略（否则 `/docs` 会显示 `string`）。
+2. 成功响应按场景使用：
+   - 分页：`PageResponse[T]`
+   - 单条：`ItemResponse[T]`
+   - 简单操作：`OkResponse`
+3. 响应 DTO 必须继承 `DTO`，请求模型才使用 `BaseModel`。
+4. 返回 DTO 实例，不要手动 `.model_dump()`。
+5. API 层保持瘦：只做参数验证、调用服务、DTO 转换、异常映射。
+
+## 异常映射约定
+
+- 常规业务校验失败：`ValueError` -> `Resp.BadRequest(...)`
+- 资源不存在：`Resp.NotFound(...)`
+- 权限不足：`Resp.Forbidden(...)`

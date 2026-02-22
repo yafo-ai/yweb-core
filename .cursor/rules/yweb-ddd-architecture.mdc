@@ -1,0 +1,28 @@
+---
+description: 创建或修改 API 路由、Service 层、领域模型、DTO、响应格式时自动激活。涵盖 DDD 分层架构和瘦 API 原则。
+globs: **/api/**/*.py, **/services/**/*.py, **/domain/**/*.py
+---
+
+# YWeb DDD 分层架构规范
+
+编写 API、Service、Domain 层代码时，**必须先阅读对应的 Skill 文档**：
+
+> **Skill 路径**：`.cursor/skills/yweb-ddd-architecture/SKILL.md`
+>
+> **WebAPI 响应补充规则**：`.cursor/rules/yweb-webapi-response.mdc`
+
+## 各层职责速查
+
+| 层 | 职责 | 禁止 |
+|----|------|------|
+| **API 层** | 参数验证、DTO 转换、异常→HTTP 响应、调用 Service | 业务逻辑、事务管理、数据库操作 |
+| **Service 层** | 跨聚合协调、事务管理、权限检查 | HTTP 感知、直接返回 Response |
+| **Domain 层** | 单聚合业务规则、数据验证、状态变更 | 调用其他聚合、HTTP 感知 |
+
+## 关键约定
+
+- **响应模型**用 `DTO`（继承自 yweb），**请求模型**用 Pydantic `BaseModel`
+- 所有 API 端点必须声明 `response_model`（`PageResponse/ItemResponse/OkResponse`）
+- 统一使用 `Resp.OK()` / `Resp.BadRequest()` / `Resp.NotFound()` 响应
+- 异常统一捕获 `ValueError`，转为 `Resp.BadRequest()`
+- 简单纯查询可由 API 层直接调用模型，无需经过 Service

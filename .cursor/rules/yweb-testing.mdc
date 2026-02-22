@@ -1,0 +1,25 @@
+---
+description: 编写或修改 pytest 测试文件、conftest.py、测试辅助工具时自动激活。提供 yweb 框架的测试编写规范。
+globs: **/tests/**/*.py, **/test_*.py, **/conftest.py, pytest.ini
+---
+
+# YWeb Pytest 测试编写规范
+
+编写测试文件时，**必须先阅读对应的 Skill 文档**：
+
+> **Skill 路径**：`.cursor/skills/yweb-testing/SKILL.md`
+>
+> **测试真实性补充 Skill**：`.cursor/skills/yweb-test-quality/SKILL.md`
+
+## 关键规范速查
+
+1. **非测试类禁止以 `Test` 开头**：辅助类、模型类、Mock 类不能以 `Test` 开头
+2. **数据库 fixture 标准模式**：`memory_engine`（StaticPool）→ `setup_db`（autouse）→ `CoreModel.query = session_scope.query_property()`
+3. **测试模型必须设置** `__table_args__ = {'extend_existing': True}`
+4. **测试模型表名**使用 `test_` 前缀
+5. **每个测试方法独立**，不依赖其他测试的执行顺序
+6. **中文文档字符串**：每个测试类和测试方法都要有中文 docstring
+7. **异步测试**：使用 `@pytest.mark.asyncio` 标记
+8. **异常断言**：使用 `pytest.raises(ValueError, match="...")`
+9. **Mock 优先使用** `unittest.mock`（Mock / patch / AsyncMock）
+10. **测试失败先诊断**：先输出问题与方案，再由用户决定是否改源码

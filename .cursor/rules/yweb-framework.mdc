@@ -1,0 +1,26 @@
+---
+description: 编写或修改任何基于 yweb 框架的 Python 代码时自动激活。提供框架总览和编码规范索引。
+globs: yweb-core/yweb/**/*.py, **/app/**/*.py
+---
+
+# YWeb 框架编码规范
+
+编写或修改 yweb 框架相关代码时，**必须先阅读对应的 Skill 文档**：
+
+> **Skill 路径**：`.cursor/skills/yweb-framework/SKILL.md`
+>
+> **WebAPI 响应补充规则**：`.cursor/rules/yweb-webapi-response.mdc`
+>
+> **前端 API 封装补充规则**：`.cursor/rules/frontend-api-conventions.mdc`
+
+## 核心原则速查
+
+1. **Active Record 模式**：领域模型继承 ORM 基类，直接具备数据访问能力
+2. **DDD 分层**：API 层 → Service 层 → Domain 层，职责分离
+3. **瘦 API 原则**：API 层只做参数验证、DTO 转换、异常捕获
+4. **异常处理**：使用 `ValueError` 表达业务规则违反，不定义自定义异常类
+5. **Model 字段**：所有字段必须有 `comment` 参数
+6. **响应格式**：使用 `Resp.OK()` / `Resp.NotFound()` 等统一响应
+7. **事务管理**：Service 层使用 `@transactional` 装饰器
+
+具体规范细节以 `yweb-core/docs/` 下的文档为准，不要凭猜测编码。

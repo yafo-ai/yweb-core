@@ -1,0 +1,24 @@
+---
+description: 编写数据库模型定义、CRUD 操作、查询过滤、分页、软删除、事务管理、批量操作、关系定义等数据层代码时自动激活。
+globs: yweb-core/yweb/orm/**/*.py, **/domain/**/entities.py, **/domain/**/model/**/*.py, **/models_registry.py, **/database.py
+---
+
+# YWeb ORM 编码规范
+
+编写或修改 ORM 相关代码时，**必须先阅读对应的 Skill 文档**：
+
+> **Skill 路径**：`.cursor/skills/yweb-orm/SKILL.md`
+>
+> **DDD 分层补充**：`.cursor/rules/yweb-ddd-architecture.mdc`
+
+## 关键规范速查
+
+1. **所有字段必须有 `comment`**：`mapped_column(String(255), comment="字段说明")`
+2. **使用 SQLAlchemy 2.0 风格**：`Mapped[str]` 类型注解 + `mapped_column()`
+3. **继承选择**：`BaseModel`（含 id/name/code/时间戳/软删除）或 `CoreModel`（仅 id+时间戳）
+4. **软删除**：`BaseModel` 自带，查询自动过滤已删除记录
+5. **事务管理**：Service 层使用 `@transactional`，不在 Model 层管理事务
+6. **Active Record 方法**：`.add()` / `.update()` / `.delete()` / `.get()` / `.get_all()` / `.query`
+7. **模型层不关心 HTTP**：不返回 `Resp.*`、不抛 HTTP 相关异常
+
+不确定时先阅读 `yweb-core/docs/03_orm_guide.md`。

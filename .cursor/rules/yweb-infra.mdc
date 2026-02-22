@@ -1,0 +1,23 @@
+---
+description: 使用缓存（@cached）、异常处理（Err）、日志（get_logger）、配置（AppSettings/YAML）、文件存储、定时任务（Scheduler）时自动激活。
+globs: yweb-core/yweb/cache/**/*.py, yweb-core/yweb/log/**/*.py, yweb-core/yweb/config/**/*.py, yweb-core/yweb/storage/**/*.py, yweb-core/yweb/scheduler/**/*.py, yweb-core/yweb/exceptions/**/*.py, yweb-core/yweb/middleware/**/*.py, **/config.py, **/logger.py, **/startup.py
+---
+
+# YWeb 基础设施模块规范
+
+使用基础设施模块时，**必须先阅读对应的 Skill 文档**：
+
+> **Skill 路径**：`.cursor/skills/yweb-infra/SKILL.md`
+
+## 模块速查
+
+| 模块 | 用法 | 详细文档 |
+|------|------|----------|
+| **缓存** | `@cached(ttl=秒数)` | `yweb-core/docs/11_cache_guide.md` |
+| **异常处理** | `Err` 快捷类 / `register_exception_handlers(app)` | `yweb-core/docs/05_exception_handling.md` |
+| **日志** | `get_logger()`（不要用 `logging.getLogger()`） | `yweb-core/docs/04_log_guide.md` |
+| **配置** | `AppSettings` + YAML + 环境变量 | `yweb-core/docs/02_config_guide.md` |
+| **文件存储** | 本地 / OSS / S3 | `yweb-core/docs/10_storage_guide.md` |
+| **定时任务** | `Scheduler` + Builder 模式 | `yweb-core/docs/09_scheduler_guide.md` |
+
+使用前**必须先阅读对应文档**，不要凭猜测编码。
