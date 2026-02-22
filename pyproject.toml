@@ -1,0 +1,214 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yweb"
+version = "0.1.0"
+description = "FastAPI基础类库，提供响应封装、中间件、ORM、认证、日志等基础功能"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "YAFO-AI Team" }
+]
+keywords = [
+    "fastapi",
+    "sqlalchemy",
+    "orm",
+    "middleware",
+    "jwt",
+    "authentication",
+    "logging"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Framework :: FastAPI",
+    "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+requires-python = ">=3.8"
+
+dependencies = [
+    "fastapi>=0.100.0",
+    "sqlalchemy>=2.0.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "python-multipart>=0.0.6",
+    "starlette>=0.27.0",
+    "bcrypt>=4.0.0",
+    "cachetools>=5.2.0",
+    "python-jose[cryptography]>=3.3.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+# LDAP 支持
+ldap = ["ldap3>=2.9.0"]
+
+# ==================== 存储模块可选依赖 ====================
+
+# 异步文件操作支持
+async = ["aiofiles>=23.0.0"]
+
+# 阿里云 OSS 存储
+oss = ["oss2>=2.18.0"]
+
+# AWS S3 / MinIO 存储
+s3 = ["boto3>=1.28.0"]
+
+# Redis Token 存储（用于分布式安全URL）
+redis = ["redis>=4.5.0"]
+
+# 文件验证增强（magic number 检测、图片尺寸验证）
+validation = [
+    "python-magic>=0.4.27",
+    "pillow>=10.0.0",
+]
+
+# 存储模块全部功能
+storage-all = [
+    "aiofiles>=23.0.0",
+    "oss2>=2.18.0",
+    "boto3>=1.28.0",
+    "redis>=4.5.0",
+    "python-magic>=0.4.27",
+    "pillow>=10.0.0",
+]
+
+# ==================== 开发依赖 ====================
+
+# 开发和测试依赖
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "pytest-asyncio>=0.21.0",
+    "httpx>=0.24.0",
+    "requests>=2.31.0",
+    "pytest-mock>=3.10.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+    "types-PyYAML>=6.0.0",
+]
+
+# ==================== 组合安装 ====================
+
+# 所有可选依赖
+all = [
+    "ldap3>=2.9.0",
+    "aiofiles>=23.0.0",
+    "oss2>=2.18.0",
+    "boto3>=1.28.0",
+    "redis>=4.5.0",
+    "python-magic>=0.4.27",
+    "pillow>=10.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/yweb"
+Documentation = "https://github.com/yourusername/yweb#readme"
+Repository = "https://github.com/yourusername/yweb.git"
+Issues = "https://github.com/yourusername/yweb/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["yweb*"]
+
+[tool.setuptools.package-data]
+yweb = ["py.typed"]
+
+# ============================================================
+# pytest 配置
+# ============================================================
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+markers = [
+    "slow: marks tests as slow",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+
+# ============================================================
+# ruff 配置 (代码检查和格式化)
+# ============================================================
+[tool.ruff]
+target-version = "py38"
+line-length = 120
+exclude = [
+    ".git",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "*.egg-info",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "UP",     # pyupgrade
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "B008",   # do not perform function calls in argument defaults
+    "B905",   # zip strict
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["yweb"]
+
+# ============================================================
+# mypy 配置 (类型检查)
+# ============================================================
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_ignores = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+exclude = [
+    "tests",
+    "examples",
+    "docs",
+]
+
+# ============================================================
+# coverage 配置 (测试覆盖率)
+# ============================================================
+[tool.coverage.run]
+source = ["yweb"]
+branch = true
+omit = [
+    "*/tests/*",
+    "*/examples/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]

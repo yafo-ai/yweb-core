@@ -1,0 +1,29 @@
+# 运行时依赖
+fastapi>=0.124.4
+sqlalchemy>=2.0.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+python-multipart>=0.0.6
+starlette>=0.27.0
+bcrypt>=4.0.0
+cachetools>=6.2.4
+sqlalchemy_history>=2.1.4
+passlib>=1.7.4
+requests>=2.31.0
+# JWT 支持（可选，用于 auth.jwt 模块）
+python-jose[cryptography]>=3.3.0
+
+# 定时任务支持（用于 scheduler 模块）
+apscheduler>=3.10.0,<4.0.0
+
+# HTTP 任务支持（可选，用于 scheduler.HttpJob）
+aiohttp>=3.8.0
+
+# 分布式锁支持（可选，用于 scheduler 分布式部署）
+# redis>=4.5.0
+
+# LDAP 支持（可选，用于 auth.ldap 模块）
+# ldap3>=2.9.0
+
+# YAML 配置支持（可选，用于 config.loader）
+pyyaml>=6.0

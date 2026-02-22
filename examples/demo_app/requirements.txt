@@ -1,0 +1,8 @@
+# Demo应用依赖
+
+# 安装本地开发版本的yweb
+# 在demo_app目录执行：pip install -e ../../
+
+# 运行服务器
+uvicorn>=0.23.0
+
