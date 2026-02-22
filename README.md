@@ -45,6 +45,14 @@ YWeb 项目已集成 AI 编程助手功能，预制了常用的开发 skills，�
 
 ---
 
+## 示例项目
+
+**y-sso-system** — 基于 YWeb 框架开发的单点登录系统演示项目，展示了认证授权、组织架构、权限管理等核心功能的实际应用。
+
+- **GitHub**: [zhb-ai/y-sso-system](https://github.com/zhb-ai/y-sso-system/tree/main/app)
+
+---
+
 ## 快速体验
 
 ### 30 秒启动一个 API 服务
