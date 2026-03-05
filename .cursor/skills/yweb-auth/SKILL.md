@@ -12,16 +12,20 @@ YWeb 提供完整的认证授权体系：
 - **双 Token 机制**：Access Token（短期）+ Refresh Token（长期）
 - **认证服务基类**：继承 `BaseAuthService` 实现自定义认证
 - **一站式认证设置**：`setup_auth()` 快速启用
+- **Token 黑名单**：`setup_auth(token_blacklist=True)` 自动集成黑名单检查，登出/踢出时撤销 Token
 - **RBAC 权限框架**：基于角色的访问控制，支持树形角色继承
-- **缓存优化**：认证结果使用 `@cached` 缓存，减少数据库查询
+- **缓存优化**：`@cached(orm_model=User)` 缓存用户信息，自动 merge 回 Session 解决 detached 问题
+- **M2M 关系缓存失效**：`cache_invalidator.register()` 默认监听 ManyToMany 集合变更（如 roles 增删），自动失效缓存
 - **组织架构管理**：`setup_organization()` 快速启用组织管理功能
 
 ## 关键编码规范
 
-1. **认证依赖注入**：使用 `get_current_user` 作为 FastAPI 依赖
+1. **认证依赖注入**：使用 `auth.get_current_user` 作为 FastAPI 依赖（`setup_auth()` 返回的 `AuthSetup` 对象）
 2. **权限检查**：使用权限装饰器或依赖注入，不在 API 层手动检查
 3. **Token 处理**：后端使用 `jwt_manager`，前端实现自动刷新机制
 4. **用户模型**：认证相关模型遵循框架约定（RoleMixin 等）
+5. **缓存 ORM 对象**：使用 `@cached(orm_model=User)` 而非裸 `@cached()`，确保缓存命中时自动 merge 回 Session
+6. **缓存失效**：`cache_invalidator.register(Model, func)` 默认 `watch_relationships=True`，自动监听 M2M 集合变更；显式传 `False` 可关闭
 
 ## 详细规范文档
 

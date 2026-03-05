@@ -1,0 +1,217 @@
+"""ORM 对象缓存测试
+
+测试 @cached(orm_model=...) 的 Session merge 机制
+和 cache_invalidator 的 watch_relationships（M2M 集合变更失效）。
+"""
+
+import pytest
+from unittest.mock import MagicMock, patch, PropertyMock
+from types import SimpleNamespace
+
+from yweb.cache import cached, CacheInvalidator
+
+
+class TestCachedOrmModel:
+    """测试 @cached 的 orm_model 参数"""
+
+    def test_cache_hit_calls_ensure_session(self):
+        """缓存命中时应调用 _ensure_session 处理 detached 对象"""
+        fake_db = {1: SimpleNamespace(id=1, name="Alice")}
+
+        cf = cached(ttl=60, orm_model=object)(
+            lambda uid: fake_db.get(uid)
+        )
+
+        with patch.object(cf, '_ensure_session', wraps=cf._ensure_session) as spy:
+            cf(1)  # cache miss
+            assert spy.call_count == 0
+
+            cf(1)  # cache hit
+            assert spy.call_count == 1
+
+    def test_ensure_session_merges_detached_object(self):
+        """_ensure_session 应对 detached 对象执行 merge"""
+        mock_model = MagicMock()
+        mock_session = MagicMock()
+        mock_model.query.session = mock_session
+
+        merged_user = SimpleNamespace(id=1, name="merged")
+        mock_session.merge.return_value = merged_user
+
+        cf = cached(ttl=60, orm_model=mock_model)(lambda uid: SimpleNamespace(id=uid))
+
+        with patch('sqlalchemy.orm.session.object_session', return_value=None):
+            cf(1)  # cache miss
+            result = cf(1)  # cache hit → _ensure_session → merge
+
+        mock_session.merge.assert_called_once()
+        assert mock_session.merge.call_args[1] == {'load': False}
+        assert result is merged_user
+
+    def test_ensure_session_skips_when_already_attached(self):
+        """对象已在 Session 中时不应 merge"""
+        mock_model = MagicMock()
+        user = SimpleNamespace(id=1)
+
+        cf = cached(ttl=60, orm_model=mock_model)(lambda uid: user)
+
+        with patch('sqlalchemy.orm.session.object_session', return_value=MagicMock()):
+            cf(1)
+            result = cf(1)
+
+        mock_model.query.session.merge.assert_not_called()
+        assert result is user
+
+    def test_no_orm_model_returns_raw_value(self):
+        """不指定 orm_model 时直接返回缓存值"""
+        cf = cached(ttl=60)(lambda uid: SimpleNamespace(id=uid))
+
+        cf(1)
+        result = cf(1)
+        assert result.id == 1
+
+
+class TestWatchRelationships:
+    """测试 cache_invalidator 的 watch_relationships 功能"""
+
+    def _make_m2m_model(self):
+        """构造带 ManyToMany 关系的模拟模型"""
+        mock_rel = MagicMock()
+        mock_rel.secondary = MagicMock()  # 非 None → ManyToMany
+        mock_rel.key = "roles"
+
+        mock_mapper = MagicMock()
+        mock_mapper.relationships = [mock_rel]
+
+        mock_model = MagicMock()
+        mock_model.__name__ = "FakeUser"
+        mock_model.roles = MagicMock()
+
+        return mock_model, mock_mapper
+
+    def test_m2m_append_triggers_invalidation(self):
+        """M2M 集合 append 应触发缓存失效"""
+        invalidator = CacheInvalidator()
+        mock_model, mock_mapper = self._make_m2m_model()
+        call_count = 0
+
+        @cached(ttl=60)
+        def get_obj(obj_id: int):
+            nonlocal call_count
+            call_count += 1
+            return SimpleNamespace(id=obj_id)
+
+        from sqlalchemy import event
+        with patch('sqlalchemy.inspect', return_value=mock_mapper):
+            with patch.object(event, 'listen') as mock_listen:
+                invalidator.register(mock_model, get_obj, watch_relationships=True)
+
+                append_calls = [
+                    c for c in mock_listen.call_args_list
+                    if c[0][1] == "append"
+                ]
+                remove_calls = [
+                    c for c in mock_listen.call_args_list
+                    if c[0][1] == "remove"
+                ]
+                assert len(append_calls) == 1, "应注册 append 监听器"
+                assert len(remove_calls) == 1, "应注册 remove 监听器"
+
+    def test_collection_change_bypasses_event_filter(self):
+        """collection_change 事件应绕过注册时的 events 过滤"""
+        invalidator = CacheInvalidator()
+        call_count = 0
+
+        @cached(ttl=60)
+        def get_obj(obj_id: int):
+            nonlocal call_count
+            call_count += 1
+            return SimpleNamespace(id=obj_id)
+
+        # 只注册 after_update 事件
+        invalidator._registrations[object] = [{
+            "func": get_obj,
+            "key_extractor": lambda o: o.id,
+            "events": ("after_update",),
+        }]
+
+        get_obj(1)
+        assert call_count == 1
+
+        # collection_change 不在 events 里，但仍应触发失效
+        invalidator._invalidate_for_target(
+            object, SimpleNamespace(id=1), "collection_change"
+        )
+        get_obj(1)
+        assert call_count == 2, "collection_change 应绕过事件过滤，触发失效"
+
+    def test_no_m2m_relations_no_listeners(self):
+        """无 ManyToMany 关系时不应注册集合监听器"""
+        invalidator = CacheInvalidator()
+
+        mock_rel = MagicMock()
+        mock_rel.secondary = None  # OneToMany，不是 M2M
+
+        mock_mapper = MagicMock()
+        mock_mapper.relationships = [mock_rel]
+
+        mock_model = MagicMock()
+        mock_model.__name__ = "Article"
+
+        @cached(ttl=60)
+        def get_article(aid: int):
+            return SimpleNamespace(id=aid)
+
+        from sqlalchemy import event
+        with patch('sqlalchemy.inspect', return_value=mock_mapper):
+            with patch.object(event, 'listen') as mock_listen:
+                invalidator.register(mock_model, get_article, watch_relationships=True)
+
+                collection_calls = [
+                    c for c in mock_listen.call_args_list
+                    if c[0][1] in ("append", "remove")
+                ]
+                assert len(collection_calls) == 0, "OneToMany 不应注册集合监听器"
+
+    def test_watch_relationships_default_true(self):
+        """watch_relationships 默认值应为 True"""
+        invalidator = CacheInvalidator()
+        mock_model, mock_mapper = self._make_m2m_model()
+
+        @cached(ttl=60)
+        def get_obj(obj_id: int):
+            return SimpleNamespace(id=obj_id)
+
+        from sqlalchemy import event
+        with patch('sqlalchemy.inspect', return_value=mock_mapper):
+            with patch.object(event, 'listen') as mock_listen:
+                # 不显式传 watch_relationships，默认应为 True
+                invalidator.register(mock_model, get_obj)
+
+                append_calls = [
+                    c for c in mock_listen.call_args_list
+                    if c[0][1] == "append"
+                ]
+                assert len(append_calls) == 1, "默认应注册 M2M 集合监听器"
+
+    def test_watch_relationships_false_skips(self):
+        """显式 watch_relationships=False 时不应注册集合监听器"""
+        invalidator = CacheInvalidator()
+        mock_model, mock_mapper = self._make_m2m_model()
+
+        @cached(ttl=60)
+        def get_obj(obj_id: int):
+            return SimpleNamespace(id=obj_id)
+
+        from sqlalchemy import event
+        with patch('sqlalchemy.inspect', return_value=mock_mapper):
+            with patch.object(event, 'listen') as mock_listen:
+                invalidator.register(
+                    mock_model, get_obj, watch_relationships=False
+                )
+
+                collection_calls = [
+                    c for c in mock_listen.call_args_list
+                    if c[0][1] in ("append", "remove")
+                ]
+                assert len(collection_calls) == 0

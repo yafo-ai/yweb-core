@@ -970,7 +970,7 @@ app.include_router(
 
 ### 实现方案（推荐：setup_auth 一站式）
 
-> **推荐使用 `setup_auth()`**：`setup_auth()` 已内置用户缓存 + 自动失效，无需手动配置。详见 [认证指南 - 一站式认证设置](06_auth_guide.md#一站式认证设置-setup_auth推荐)。
+> **推荐使用 `setup_auth()`**：自动完成 缓存 + 自动失效 + 黑名单检查 + Session 安全。详见 [认证指南 - 一站式认证设置](06_auth_guide.md#一站式认证设置-setup_auth推荐)。
 
 ```python
 # app/api/dependencies.py — 推荐方式
@@ -985,6 +985,17 @@ auth = setup_auth(User, cache_ttl=60)  # 自动完成缓存 + 失效注册
 # 缓存统计: auth.get_user_cache_stats()
 ```
 
+**`setup_auth` 自动处理的缓存问题：**
+
+| 问题 | 自动解决方案 |
+|------|------------|
+| 频繁查库 | `@cached` 缓存用户对象，默认 60s TTL |
+| 缓存脏数据（模型本身） | `cache_invalidator` 监听 User 的 ORM 事件自动失效 |
+| 缓存脏数据（M2M 关系） | `cache_invalidator` 默认监听 ManyToMany 集合变更（如 `user.roles.append(role)`）自动失效 |
+| 缓存对象 Session 脱离 | `@cached(orm_model=User)` 缓存命中时自动 `session.merge(load=False)` |
+| 角色等关系加载 | 首次查询自动 `selectinload` 所有 ManyToMany 关系，缓存对象包含完整数据 |
+| 黑名单检查 | 配置 `token_blacklist=True` 后自动在 JWT 校验前检查 |
+
 ### 手动实现方案（需要完全自定义时）
 
 如果需要自定义缓存逻辑（如自定义 key、复杂的活跃判断等），可手动组装：
@@ -993,30 +1004,30 @@ auth = setup_auth(User, cache_ttl=60)  # 自动完成缓存 + 失效注册
 # app/api/dependencies.py
 
 from typing import Optional
+from sqlalchemy.orm import selectinload
 from yweb.cache import cached, cache_invalidator
 from yweb.auth import create_auth_dependency
 from app.services.jwt_service import jwt_manager
 from app.domain.auth.model.user import User
 
 
-# 带缓存的用户获取函数
-@cached(ttl=60, key_prefix="user:auth")
+# orm_model=User：缓存命中时自动 merge 回当前 Session，解决 DetachedInstanceError
+@cached(ttl=60, key_prefix="user:auth", orm_model=User)
 def get_user_by_id(user_id: int) -> Optional[User]:
-    """通过用户 ID 获取用户（带缓存）
-    
-    缓存失效：User 模型更新/删除时自动失效。
-    """
-    user = User.get_by_id(user_id)
+    """通过用户 ID 获取用户（带缓存）"""
+    user = User.query.options(
+        selectinload(User.roles)    # 调用方决定预加载什么关系
+    ).filter_by(id=user_id).first()
     if user and user.is_active:
         return user
     return None
 
 
-# 注册自动缓存失效（关键！）
+# 默认自动监听 M2M 集合变更（user.roles 增删时也触发缓存失效）
 cache_invalidator.register(User, get_user_by_id)
 
 
-# 创建认证依赖
+# 无需手动包装 session merge，orm_model 已处理
 get_current_user = create_auth_dependency(
     jwt_manager=jwt_manager,
     user_getter=get_user_by_id,
@@ -1186,7 +1197,36 @@ if stats['hit_rate'] < 0.8:
     pass
 ```
 
-### 6. 多实例部署注意事项
+### 6. 缓存 ORM 对象的正确姿势
+
+缓存 SQLAlchemy ORM 对象时，内存缓存（MemoryBackend）存储的是**对象引用**。请求结束后 Session 关闭，缓存对象变为 detached，后续请求访问 lazy 关系会抛 `DetachedInstanceError`。
+
+**解决方案：使用 `orm_model` + `watch_relationships`**
+
+```python
+from yweb.cache import cached, cache_invalidator
+from sqlalchemy.orm import selectinload
+
+# 1. orm_model=Product：缓存命中时自动 merge 回 Session
+@cached(ttl=300, orm_model=Product)
+def get_product(product_id: int):
+    return Product.query.options(
+        selectinload(Product.categories)   # 调用方决定预加载什么
+    ).filter_by(id=product_id).first()
+
+# 2. 注册自动失效（默认监听 M2M 集合变更）
+cache_invalidator.register(Product, get_product)
+```
+
+| 参数 | 作用 | 解决的问题 |
+|------|------|-----------|
+| `orm_model` | 缓存命中时自动 `session.merge(load=False)` | DetachedInstanceError |
+| `watch_relationships` | 监听 M2M 集合 append/remove 事件 | M2M 变更后缓存脏数据 |
+| `selectinload(...)` | 预加载关系数据进缓存 | 每次命中都额外查询关系 |
+
+> **职责分离**：`orm_model` 和 `watch_relationships` 是缓存层的通用能力；预加载什么关系是业务层的决策。
+
+### 7. 多实例部署注意事项
 
 使用内存缓存时，多实例之间缓存不共享：
 
@@ -1239,6 +1279,14 @@ def get_user(user_id: int):
 | `@memory_cache(ttl, maxsize)` | 内存缓存装饰器（简写） |
 | `@redis_cache(redis, ttl)` | Redis 缓存装饰器（简写） |
 
+**`@cached` 关键参数：**
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `ttl` | int | 缓存过期时间（秒），默认 300 |
+| `invalidate_on` | Model/list/dict | 自动失效配置，ORM 模型变更时清除缓存 |
+| `orm_model` | Model class | 指定后，缓存命中时自动将 detached ORM 对象 merge 回当前 Session |
+
 ### CachedFunction 方法
 
 | 方法 | 说明 |
@@ -1255,8 +1303,14 @@ def get_user(user_id: int):
 
 | 方法 | 说明 |
 |------|------|
-| `register(model, func, key_extractor, events)` | 注册模型与缓存函数的关联 |
+| `register(model, func, key_extractor, events, watch_relationships)` | 注册模型与缓存函数的关联 |
 | `unregister(model, func)` | 取消注册 |
+
+**`register` 关键参数：**
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `watch_relationships` | bool | 默认 True。自动监听模型上所有 ManyToMany 集合的 append/remove 事件，集合变更时触发缓存失效。模型无 M2M 关系时零开销 |
 | `get_registrations(model)` | 获取注册信息 |
 | `enable()` | 启用自动失效 |
 | `disable()` | 禁用自动失效 |
@@ -1310,9 +1364,9 @@ def get_user(user_id: int):
 
 ## 完整示例
 
-### 推荐方式：setup_auth 一站式（自动缓存 + 自动失效）
+### 推荐方式：setup_auth 一站式（自动缓存 + 自动失效 + Session 安全）
 
-`setup_auth()` 内部自动完成 `@cached` + `cache_invalidator.register()` + `create_auth_dependency()`，无需手动编写：
+`setup_auth()` 内部自动完成 `@cached` + `cache_invalidator.register()` + `create_auth_dependency()` + 黑名单检查 + Session 安全 merge，无需手动编写：
 
 ```python
 # app/api/dependencies.py — 推荐
@@ -1321,15 +1375,21 @@ from yweb.auth import setup_auth
 from app.domain.auth.model.user import User
 from app.config import settings
 
-# 一站式认证设置（内部自动完成缓存 + 失效注册 + 依赖创建）
 auth = setup_auth(User, jwt_settings=settings.jwt, token_url="/api/v1/auth/token")
 
 # 路由中使用: Depends(auth.get_current_user)
 # JWT 管理器: auth.jwt_manager
-# 用户获取（带缓存）: auth.user_getter
+# 用户获取（带缓存 + Session 安全）: auth.user_getter
 # 手动失效: auth.invalidate_user_cache(user_id)
 # 缓存统计: auth.get_user_cache_stats()
 ```
+
+**框架自动处理的内部细节（用户无需关心）：**
+
+1. 首次查询时自动 `selectinload` 所有 ManyToMany 关系（roles/permissions 等）
+2. `@cached(orm_model=User)` 缓存命中时自动 `session.merge(load=False)`
+3. `cache_invalidator` 默认监听 M2M 集合变更（如 `user.roles.append(role)`）自动失效
+4. 配置 `token_blacklist=True` 时，自动在 JWT 校验前检查黑名单
 
 ### 手动方式：完全自定义（自动失效）
 
@@ -1339,32 +1399,30 @@ auth = setup_auth(User, jwt_settings=settings.jwt, token_url="/api/v1/auth/token
 # app/api/dependencies.py — 手动方式
 
 from typing import Optional
+from sqlalchemy.orm import selectinload
 from yweb.cache import cached, cache_invalidator
 from yweb.auth import create_auth_dependency
 from app.services.jwt_service import jwt_manager
 from app.domain.auth.model.user import User
 
 
-# ==================== 用户获取（带缓存 + 自动失效） ====================
-
-@cached(ttl=60, key_prefix="user:auth")
+# orm_model=User：缓存命中时自动 merge 回 Session
+@cached(ttl=60, key_prefix="user:auth", orm_model=User)
 def get_user_by_id(user_id: int) -> Optional[User]:
-    """通过用户 ID 获取用户（带缓存）
-    
-    缓存失效：User 模型更新/删除时自动失效（通过 cache_invalidator）。
-    """
-    user = User.get_by_id(user_id)
+    """通过用户 ID 获取用户（带缓存）"""
+    user = User.query.options(
+        selectinload(User.roles)
+    ).filter_by(id=user_id).first()
     if user and user.is_active:
         return user
     return None
 
 
-# 注册自动缓存失效：User 更新/删除时自动失效 get_user_by_id 缓存
+# 默认监听 M2M 集合变更（user.roles 增删时也失效）
 cache_invalidator.register(User, get_user_by_id)
 
 
-# ==================== 认证依赖 ====================
-
+# 无需手动 session merge 包装
 get_current_user = create_auth_dependency(
     jwt_manager=jwt_manager,
     user_getter=get_user_by_id,
@@ -1377,8 +1435,6 @@ get_current_user_optional = create_auth_dependency(
     auto_error=False,
 )
 
-
-# ==================== 缓存管理（可选手动控制） ====================
 
 def invalidate_user_cache(user_id: int) -> bool:
     """手动失效用户缓存（特殊场景使用）

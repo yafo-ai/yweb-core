@@ -164,36 +164,52 @@ class CacheRegistry:
         self._functions: Dict[str, "CachedFunction"] = {}
     
     def register(self, func: "CachedFunction") -> None:
-        """注册缓存函数"""
-        name = func.__name__
-        self._functions[name] = func
-        logger.debug(f"Cache function registered: {name}")
+        """注册缓存函数（以全限定名为 key）"""
+        fqn = _make_auto_key_prefix(func._func) if hasattr(func, '_func') else func.__name__
+        self._functions[fqn] = func
+        logger.debug(f"Cache function registered: {fqn}")
     
+    def _resolve_key(self, name: str) -> Optional[str]:
+        """解析函数名 → 注册表中的完整 key
+
+        优先精确匹配全限定名，其次按裸函数名后缀匹配（唯一时命中）。
+        """
+        if name in self._functions:
+            return name
+        suffix = f".{name}"
+        candidates = [k for k in self._functions if k.endswith(suffix) or k == name]
+        if len(candidates) == 1:
+            return candidates[0]
+        return None
+
     def unregister(self, name: str) -> bool:
         """取消注册"""
-        if name in self._functions:
-            del self._functions[name]
+        key = self._resolve_key(name)
+        if key is not None:
+            del self._functions[key]
             return True
         return False
     
     def get(self, name: str) -> Optional["CachedFunction"]:
         """获取指定的缓存函数"""
-        return self._functions.get(name)
+        key = self._resolve_key(name)
+        return self._functions.get(key) if key else None
     
     def list_functions(self) -> List[Dict[str, Any]]:
         """列出所有已注册的缓存函数信息
         
         Returns:
-            缓存函数摘要列表
+            缓存函数摘要列表，包含 name（短名）和 fqn（全限定名）
         """
         result = []
-        for name, func in self._functions.items():
+        for fqn, func in self._functions.items():
             result.append({
-                "name": name,
+                "name": func.__name__,
+                "fqn": fqn,
                 "module": func.__module__,
                 "ttl": func._ttl,
                 "backend": func._backend_type,
-                "key_prefix": func._key_prefix or name,
+                "key_prefix": func._key_prefix or fqn,
             })
         return result
     
@@ -226,12 +242,12 @@ class CacheRegistry:
         """清空指定函数的缓存
         
         Args:
-            name: 函数名
+            name: 函数名（支持裸函数名或全限定名）
             
         Returns:
             是否成功
         """
-        func = self._functions.get(name)
+        func = self.get(name)
         if func is None:
             return False
         func.clear()
@@ -251,7 +267,7 @@ class CacheRegistry:
     
     def list_entries(self, name: str, limit: int = 50) -> Optional[Dict[str, Any]]:
         """查看指定函数的缓存条目列表（预览）。"""
-        func = self._functions.get(name)
+        func = self.get(name)
         if func is None:
             return None
         entries = func.inspect_entries(limit=limit)
@@ -263,7 +279,7 @@ class CacheRegistry:
     
     def get_entry(self, name: str, key: str) -> Optional[Dict[str, Any]]:
         """查看指定函数的单个缓存条目（预览）。"""
-        func = self._functions.get(name)
+        func = self.get(name)
         if func is None:
             return None
         return func.inspect_entry(key)
@@ -286,6 +302,18 @@ InvalidateOnType = Union[
 ]
 
 F = TypeVar("F", bound=Callable[..., Any])
+
+
+def _make_auto_key_prefix(func: Callable) -> str:
+    """根据函数的 module + qualname 生成全局唯一的缓存键前缀
+
+    - 模块级函数: ``app.services.user_service.get_user``
+    - 类方法: ``app.services.user_service.UserService.get_user``
+    - 闭包/局部函数: ``yweb.auth.setup._create_user_getter.<locals>._get_user``
+    """
+    module = getattr(func, "__module__", None) or ""
+    qualname = getattr(func, "__qualname__", None) or func.__name__
+    return f"{module}.{qualname}" if module else qualname
 
 
 def _make_cache_key(func_name: str, args: tuple, kwargs: dict) -> str:
@@ -322,6 +350,9 @@ class CachedFunction:
     包装原函数，添加缓存功能和管理方法。
     """
     
+    _key_prefix_owners: Dict[str, str] = {}
+    """类级别注册表：key_prefix → 函数全限定名，用于检测冲突"""
+    
     def __init__(
         self,
         func: Callable,
@@ -331,20 +362,26 @@ class CachedFunction:
         key_builder: Optional[Callable] = None,
         backend_type: str = "memory",
         invalidate_on: Optional[InvalidateOnType] = None,
+        orm_model: Optional[Type] = None,
     ):
         self._func = func
         self._backend = backend
         self._ttl = ttl
-        self._key_prefix = key_prefix if key_prefix is not None else func.__name__
+        self._key_prefix = key_prefix if key_prefix is not None else _make_auto_key_prefix(func)
         self._key_builder = key_builder
         self._backend_type = backend_type
         self._invalidate_on = invalidate_on
+        self._orm_model = orm_model
         
         # 保留原函数的元信息
         self.__name__ = func.__name__
         self.__doc__ = func.__doc__
         self.__module__ = func.__module__
+        self.__qualname__ = getattr(func, "__qualname__", func.__name__)
         self.__wrapped__ = func
+        
+        # 冲突检测
+        self._check_key_prefix_conflict()
         
         # 自动注册到全局注册表
         cache_registry.register(self)
@@ -352,6 +389,19 @@ class CachedFunction:
         # 自动注册缓存失效
         if invalidate_on is not None:
             self._register_invalidation(invalidate_on)
+    
+    def _check_key_prefix_conflict(self) -> None:
+        """检测 key_prefix 冲突：两个不同函数使用了相同前缀"""
+        fqn = _make_auto_key_prefix(self._func)
+        existing = CachedFunction._key_prefix_owners.get(self._key_prefix)
+        if existing is not None and existing != fqn:
+            logger.warning(
+                f"⚠️ Cache key_prefix conflict: '{self._key_prefix}' "
+                f"is already used by [{existing}], "
+                f"now being registered by [{fqn}]. "
+                f"Consider setting an explicit key_prefix to avoid collisions."
+            )
+        CachedFunction._key_prefix_owners[self._key_prefix] = fqn
     
     def _register_invalidation(self, invalidate_on: InvalidateOnType) -> None:
         """注册模型变更时的缓存自动失效
@@ -392,7 +442,11 @@ class CachedFunction:
                 )
     
     def __call__(self, *args, **kwargs) -> Any:
-        """调用函数，优先返回缓存"""
+        """调用函数，优先返回缓存
+        
+        当 orm_model 已配置时，缓存命中后自动将 detached ORM 对象
+        merge 回当前 Session（load=False，零额外查询）。
+        """
         cache_key = self._build_key(args, kwargs)
         
         # 尝试从缓存获取
@@ -402,7 +456,7 @@ class CachedFunction:
                 f"Cache hit: {cache_key} | "
                 f"func={self.__name__}, backend={self._backend_type}, ttl={self._ttl}s"
             )
-            return cached_value
+            return self._ensure_session(cached_value)
         
         # 缓存未命中，调用原函数
         logger.debug(
@@ -416,6 +470,23 @@ class CachedFunction:
             self._backend.set(cache_key, result, self._ttl)
         
         return result
+    
+    def _ensure_session(self, obj: Any) -> Any:
+        """将 detached ORM 对象 merge 回当前 Session
+        
+        仅在 orm_model 配置且对象确实 detached 时执行。
+        merge(load=False) 不发查询，仅做内存状态转移，
+        已加载的关系数据（如 roles）原样保留。
+        """
+        if self._orm_model is None:
+            return obj
+        try:
+            from sqlalchemy.orm.session import object_session
+            if object_session(obj) is None:
+                return self._orm_model.query.session.merge(obj, load=False)
+        except Exception:
+            pass
+        return obj
     
     def _build_key(self, args: tuple, kwargs: dict) -> str:
         """构建缓存键"""
@@ -463,7 +534,8 @@ class CachedFunction:
     def stats(self) -> Dict[str, Any]:
         """获取缓存统计信息"""
         stats = self._backend.get_stats()
-        stats["function"] = self._key_prefix or self.__name__
+        stats["function"] = self.__name__
+        stats["key_prefix"] = self._key_prefix
         stats["ttl"] = self._ttl
         return stats
     
@@ -586,6 +658,7 @@ def cached(
     key_builder: Optional[Callable] = None,
     enable_stats: bool = True,
     invalidate_on: Optional[InvalidateOnType] = None,
+    orm_model: Optional[Type] = None,
 ) -> Callable[[F], CachedFunction]:
     """通用缓存装饰器
     
@@ -601,6 +674,9 @@ def cached(
             - 单个模型: invalidate_on=User
             - 多个模型: invalidate_on=[User, Department]
             - 自定义 key 提取: invalidate_on={User: lambda u: u.id}
+        orm_model: ORM 模型类。指定后，内存缓存命中时自动将 detached
+            对象 merge 回当前请求的 Session（load=False，零查询），
+            解决 DetachedInstanceError。预加载什么关系由调用方自行决定。
     
     Returns:
         装饰后的函数，带有缓存管理方法
@@ -615,6 +691,13 @@ def cached(
         @cached(ttl=60, invalidate_on=User)
         def get_user(user_id: int):
             return User.get_by_id(user_id)
+        
+        # ORM 对象缓存（自动 Session 安全）
+        @cached(ttl=60, invalidate_on=User, orm_model=User)
+        def get_user(user_id: int):
+            return User.query.options(
+                selectinload(User.roles)  # 调用方决定预加载什么
+            ).filter_by(id=user_id).first()
         
         # 多模型自动失效
         @cached(ttl=60, invalidate_on=[User, Department])
@@ -652,14 +735,15 @@ def cached(
         print(get_user.stats())
     """
     def decorator(func: F) -> CachedFunction:
+        resolved_prefix = key_prefix if key_prefix is not None else _make_auto_key_prefix(func)
+
         # 创建缓存后端
         if backend == "redis":
             if redis is None:
                 raise ValueError(
                     "使用 Redis 后端时必须提供 redis 参数"
                 )
-            # Redis 后端通过 prefix 管理键命名空间（用于 clear() 扫描）
-            redis_prefix = f"{key_prefix or func.__name__}:"
+            redis_prefix = f"{resolved_prefix}:"
             cache_backend = RedisBackend(
                 redis_client=redis,
                 prefix=redis_prefix,
@@ -685,6 +769,7 @@ def cached(
             key_builder=key_builder,
             backend_type=backend,
             invalidate_on=invalidate_on,
+            orm_model=orm_model,
         )
     
     return decorator

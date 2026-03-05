@@ -986,36 +986,75 @@ def _create_user_getter(
 ):
     """创建用户获取函数（可选缓存 + 活跃检查）
     
+    缓存策略（cache_ttl > 0 时）：
+    
+    1. 自动检测模型上的 ManyToMany 关系（roles/permissions 等），查询时
+       selectinload 预加载，确保缓存对象包含完整的关系数据
+    2. @cached(orm_model=...) 自动处理 detached 对象的 Session merge
+    3. watch_relationships=True 自动监听 M2M 集合变更触发缓存失效
+    
     Returns:
         (user_getter, cached_func) 元组。cached_func 在无缓存时为 None。
     """
+    _eager_options = _build_eager_options(user_model) if cache_ttl > 0 else []
+    
     def _get_user(user_id: int):
-        user = user_model.get(user_id)
+        if _eager_options:
+            user = user_model.query.options(
+                *_eager_options
+            ).filter_by(id=user_id).first()
+        else:
+            user = user_model.get(user_id)
         if user is None:
             return None
         if active_field and not getattr(user, active_field, True):
             return None
         return user
     
-    if cache_ttl > 0:
-        try:
-            from yweb.cache import cached, cache_invalidator
-        except ImportError:
-            logger.warning("yweb.cache 不可用，跳过缓存配置")
-            return _get_user, None
-        
-        # 用 cached 装饰器包装
-        cached_get_user = cached(
-            ttl=cache_ttl,
-            key_prefix="user:auth",
-        )(_get_user)
-        
-        # 注册自动缓存失效
-        cache_invalidator.register(user_model, cached_get_user)
-        
-        return cached_get_user, cached_get_user
+    if cache_ttl <= 0:
+        return _get_user, None
     
-    return _get_user, None
+    try:
+        from yweb.cache import cached, cache_invalidator
+    except ImportError:
+        logger.warning("yweb.cache 不可用，跳过缓存配置")
+        return _get_user, None
+    
+    cached_get_user = cached(
+        ttl=cache_ttl,
+        key_prefix="user:auth",
+        orm_model=user_model,
+    )(_get_user)
+    
+    cache_invalidator.register(
+        user_model, cached_get_user, watch_relationships=True
+    )
+    
+    return cached_get_user, cached_get_user
+
+
+def _build_eager_options(user_model: Type) -> list:
+    """自动检测用户模型上的 ManyToMany 关系，构建 selectinload 预加载选项
+    
+    ManyToMany 关系（有 secondary 中间表）在 User 模型上通常是小型引用数据：
+    roles、permissions、groups、departments 等。预加载它们可以让缓存对象
+    包含完整的关系数据，merge 回 Session 后无需额外查询。
+    
+    OneToMany 关系（posts、comments 等）可能很大，不在此自动加载范围。
+    """
+    from sqlalchemy import inspect as sa_inspect
+    from sqlalchemy.orm import selectinload
+    
+    try:
+        mapper = sa_inspect(user_model)
+    except Exception:
+        return []
+    
+    options = []
+    for rel in mapper.relationships:
+        if rel.secondary is not None:
+            options.append(selectinload(getattr(user_model, rel.key)))
+    return options
 
 
 def _create_auth_dependencies(
@@ -1024,6 +1063,11 @@ def _create_auth_dependencies(
     token_url: str,
 ):
     """创建认证依赖函数对（必须认证 + 可选认证）
+    
+    黑名单检查通过延迟获取全局 TokenBlacklist 实现：
+    - setup_auth 创建依赖时，黑名单可能尚未配置（mount_routes 中才解析）
+    - 依赖函数在请求时执行，此时全局黑名单已就绪
+    - 未配置黑名单时 get_token_blacklist() 返回 None，检查自动跳过
     
     Returns:
         (get_current_user, get_current_user_optional) 元组
@@ -1042,6 +1086,18 @@ def _create_auth_dependencies(
                     raise AuthenticationException(
                         "未提供认证凭证",
                         code=ErrorCode.AUTHENTICATION_FAILED,
+                    )
+                return None
+            
+            # 黑名单检查：踢出 / 登出 / 改密码后的 token 立即失效
+            # 延迟获取全局黑名单，请求时 mount_routes 已完成配置
+            from .token_store import get_token_blacklist
+            blacklist = get_token_blacklist()
+            if blacklist and blacklist.is_revoked(token):
+                if auto_error:
+                    raise AuthenticationException(
+                        "登录已失效，请重新登录",
+                        code=ErrorCode.TOKEN_REVOKED,
                     )
                 return None
             

@@ -64,6 +64,7 @@ class CacheInvalidator:
     def __init__(self):
         self._registrations: Dict[Type, List[dict]] = {}
         self._listened_events: Dict[Type, Set[str]] = {}  # model -> 已注册监听的事件名集合
+        self._watched_relationships: Set[str] = set()  # "Model.rel_name" 去重
         self._lock = threading.RLock()
         self._enabled = True
     
@@ -73,6 +74,7 @@ class CacheInvalidator:
         cached_func: Any,
         key_extractor: Optional[Callable[[Any], Any]] = None,
         events: tuple = ("after_update", "after_delete"),
+        watch_relationships: bool = True,
     ) -> "CacheInvalidator":
         """注册模型与缓存函数的关联
         
@@ -81,6 +83,10 @@ class CacheInvalidator:
             cached_func: 被 @cached 装饰的函数（CachedFunction 实例）
             key_extractor: 从模型实例提取缓存键的函数，默认提取 id
             events: 要监听的事件元组，默认 ("after_update", "after_delete")
+            watch_relationships: 是否监听 ManyToMany 集合变更（append/remove），默认 True。
+                自动检测模型上的 ManyToMany 关系，集合增删时触发缓存失效。
+                例如 user.roles.append(role) 会自动失效该 user 的缓存。
+                模型无 ManyToMany 关系时无额外开销。设为 False 可关闭。
         
         Returns:
             self，支持链式调用
@@ -120,9 +126,14 @@ class CacheInvalidator:
                 self._setup_listeners_for_events(model, new_events)
                 self._listened_events[model].update(new_events)
             
+            # 监听 ManyToMany 集合变更
+            if watch_relationships:
+                self._setup_relationship_listeners(model)
+            
             logger.debug(
                 f"Registered cache invalidation: "
                 f"{model.__name__} -> {cached_func.__name__}"
+                f"{' (watching relationships)' if watch_relationships else ''}"
             )
         
         return self
@@ -154,6 +165,55 @@ class CacheInvalidator:
                     f"Set up {event_name} listener for {model.__name__}"
                 )
     
+    def _setup_relationship_listeners(self, model: Type):
+        """监听模型上所有 ManyToMany 集合的 append/remove 事件
+        
+        当 user.roles.append(role) 或 user.roles.remove(role) 时，
+        自动失效该 user 的缓存。仅监听有 secondary 中间表的关系
+        （即 ManyToMany），不监听 OneToMany。
+        """
+        try:
+            from sqlalchemy import event, inspect as sa_inspect
+        except ImportError:
+            return
+        
+        try:
+            mapper = sa_inspect(model)
+        except Exception:
+            return
+        
+        for rel in mapper.relationships:
+            if rel.secondary is None:
+                continue
+            
+            watch_key = f"{model.__name__}.{rel.key}"
+            if watch_key in self._watched_relationships:
+                continue
+            self._watched_relationships.add(watch_key)
+            
+            rel_attr = getattr(model, rel.key)
+            
+            def _make_collection_handler(rel_key):
+                def handler(target, value, initiator):
+                    if not self._enabled:
+                        return
+                    self._invalidate_for_target(
+                        model, target, "collection_change"
+                    )
+                    logger.debug(
+                        f"Collection change on {model.__name__}.{rel_key}: "
+                        f"invalidated cache for id={getattr(target, 'id', '?')}"
+                    )
+                return handler
+            
+            handler = _make_collection_handler(rel.key)
+            event.listen(rel_attr, "append", handler)
+            event.listen(rel_attr, "remove", handler)
+            
+            logger.debug(
+                f"Watching M2M collection: {watch_key} (append/remove)"
+            )
+    
     def _create_handler(self, model: Type, event_name: str):
         """创建事件处理器"""
         def handler(mapper, connection, target):
@@ -175,6 +235,9 @@ class CacheInvalidator:
         支持 key_extractor 返回单个值或列表：
         - 单个值：失效单个缓存
         - 列表：批量失效多个缓存（用于关联模型场景）
+        
+        event_name 为 "collection_change" 时跳过事件过滤，
+        因为 M2M 集合变更应触发所有已注册的缓存函数失效。
         """
         if not self._enabled:
             return
@@ -183,9 +246,10 @@ class CacheInvalidator:
             return
         
         for reg in self._registrations[model]:
-            # 检查是否监听此事件
-            if event_name not in reg.get("events", ()):
-                continue
+            # collection_change 始终触发（M2M 集合变更）
+            if event_name != "collection_change":
+                if event_name not in reg.get("events", ()):
+                    continue
             
             try:
                 # 提取缓存键（可能是单个值或列表）
@@ -295,6 +359,7 @@ class CacheInvalidator:
         """清空所有注册"""
         with self._lock:
             self._registrations.clear()
+            self._watched_relationships.clear()
             # 注意：SQLAlchemy 事件监听器不会被移除
             # 但由于 _registrations 为空，handler 不会执行任何操作
             logger.debug("All cache invalidation registrations cleared")

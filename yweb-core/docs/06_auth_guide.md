@@ -189,10 +189,10 @@ auth = setup_auth(User, role_model=MyRole)
 
 | 属性/方法 | 说明 |
 |----------|------|
-| `auth.get_current_user` | 必须认证的 FastAPI 依赖（未登录抛 401） |
-| `auth.get_current_user_optional` | 可选认证的 FastAPI 依赖（未登录返回 None） |
+| `auth.get_current_user` | 必须认证的 FastAPI 依赖（含黑名单检查，未登录/被撤销抛 401） |
+| `auth.get_current_user_optional` | 可选认证的 FastAPI 依赖（含黑名单检查，未登录返回 None） |
 | `auth.jwt_manager` | JWTManager 实例（用于 token 创建/验证/刷新） |
-| `auth.user_getter` | 用户获取函数（带缓存） |
+| `auth.user_getter` | 用户获取函数（带缓存 + Session 安全） |
 | `auth.role_model` | 角色模型类（启用角色时可用，否则为 None） |
 | `auth.login_record_model` | 登录记录模型类（启用登录记录时可用，否则为 None） |
 | `auth.user_router` | 用户管理路由（挂载路由后可用） |
@@ -1054,70 +1054,56 @@ blacklist = get_token_blacklist()
 blacklist.revoke_token(token)
 ```
 
-### 在认证依赖中集成
+### 与认证依赖的集成
 
-**方式1：手动集成黑名单检查**
-
-```python
-from yweb.auth import get_token_blacklist
-from fastapi import HTTPException, Depends
-from fastapi.security import HTTPBearer
-
-oauth2_scheme = HTTPBearer()
-
-def get_current_user_with_blacklist(
-    token: str = Depends(oauth2_scheme)
-):
-    # 1. 检查黑名单
-    blacklist = get_token_blacklist()
-    if blacklist and blacklist.is_revoked(token.credentials):
-        raise HTTPException(401, "Token 已被撤销")
-    
-    # 2. 正常验证
-    token_data = jwt_manager.verify_token(token.credentials)
-    if not token_data:
-        raise HTTPException(401, "无效的 Token")
-    
-    # 3. 获取用户
-    user = get_user_by_id(token_data.user_id)
-    if not user:
-        raise HTTPException(401, "用户不存在")
-    
-    return user
-
-# 使用
-@app.get("/protected")
-def protected_route(user = Depends(get_current_user_with_blacklist)):
-    return {"user_id": user.id}
-```
-
-**方式2：基于 setup_auth 添加黑名单检查**
+**`setup_auth()` 已自动集成黑名单检查**——配置 `token_blacklist=True` 后，`auth.get_current_user` 在每次请求认证时会自动检查黑名单，无需手动包装：
 
 ```python
-from yweb.auth import get_token_blacklist
-from fastapi import Depends, HTTPException
-from fastapi.security import HTTPBearer
-from app.api.dependencies import auth
+# 一站式配置，黑名单检查自动生效
+auth = setup_auth(
+    app=app,
+    user_model=User,
+    token_blacklist=True,   # 启用黑名单
+    enable_kick=True,       # 启用踢出端点
+)
 
-oauth2_scheme = HTTPBearer()
-
-# 包装添加黑名单检查
-def get_current_user_with_blacklist(
-    user = Depends(auth.get_current_user),
-    token = Depends(oauth2_scheme)
-):
-    blacklist = get_token_blacklist()
-    if blacklist and blacklist.is_revoked(token.credentials):
-        raise HTTPException(401, "Token 已被撤销")
-    return user
-
-# 使用
-@app.get("/protected")
-def protected_route(user = Depends(get_current_user_with_blacklist)):
-    return {"user_id": user.id}
+# get_current_user 自动包含黑名单检查：
+# 1. 检查 Token 是否在黑名单中（登出/踢出/撤销）
+# 2. JWT 签名和过期校验
+# 3. 用户查询（带缓存）+ 活跃状态检查
+@app.get("/me")
+def get_me(user=Depends(auth.get_current_user)):
+    return user  # 被踢出的用户会收到 401 + TOKEN_REVOKED
 ```
 
-> 也可以使用底层的 `create_auth_dependency()` 代替 `setup_auth()`，效果相同。
+**认证流程（含黑名单）：**
+
+```
+请求 → 提取 Token
+         │
+         ▼
+  Token 在黑名单中？ ──是──→ 401 TOKEN_REVOKED "登录已失效，请重新登录"
+         │ 否
+         ▼
+  JWT 签名/过期校验 ──失败──→ 401 TOKEN_EXPIRED 或 INVALID_TOKEN
+         │ 通过
+         ▼
+  用户查询（带缓存）──不存在──→ 401 AUTHENTICATION_FAILED
+         │ 存在
+         ▼
+     返回用户对象
+```
+
+**前端处理建议：** 前端可根据 `error_code` 字段区分不同的 401 场景：
+
+| `error_code` | 含义 | 前端处理 |
+|--------------|------|---------|
+| `TOKEN_EXPIRED` | Access Token 过期 | 用 Refresh Token 刷新 |
+| `TOKEN_REVOKED` | 被踢出/登出/撤销 | 跳转登录页，提示"登录已失效" |
+| `INVALID_TOKEN` | Token 无效 | 跳转登录页 |
+| `AUTHENTICATION_FAILED` | 未提供凭证/用户不存在 | 跳转登录页 |
+
+> **无需手动包装**：旧版框架需要自行编写 `get_current_user_with_blacklist` 包装函数，现在 `setup_auth(token_blacklist=True)` 自动完成，所有使用 `Depends(auth.get_current_user)` 的路由自动受保护。
 
 **完整示例：登出接口**
 
@@ -1125,7 +1111,7 @@ def protected_route(user = Depends(get_current_user_with_blacklist)):
 @app.post("/auth/logout")
 def logout(
     token: str = Depends(oauth2_scheme),
-    user = Depends(get_current_user_with_blacklist)
+    user = Depends(auth.get_current_user)
 ):
     """登出接口：撤销当前 Token"""
     blacklist = get_token_blacklist()
@@ -1133,7 +1119,7 @@ def logout(
     return Resp.OK(message="登出成功")
 
 @app.post("/auth/logout-all")
-def logout_all(user = Depends(get_current_user_with_blacklist)):
+def logout_all(user = Depends(auth.get_current_user)):
     """撤销用户所有 Token（如修改密码后）"""
     blacklist = get_token_blacklist()
     blacklist.revoke_all_user_tokens(user_id=user.id)

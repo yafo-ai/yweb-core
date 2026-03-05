@@ -2,10 +2,12 @@
 
 import pytest
 import time
+import logging
 from typing import Optional
 from dataclasses import dataclass
 
 from yweb.cache import cached, memory_cache, CachedFunction
+from yweb.cache.decorators import _make_auto_key_prefix
 
 
 # 模拟用户类
@@ -249,7 +251,8 @@ class TestCachedDecorator:
             return _fake_db.get(user_id)
         
         stats = get_user.stats()
-        assert stats["function"] == "user:auth"
+        assert stats["function"] == "get_user"
+        assert stats["key_prefix"] == "user:auth"
 
 
 class TestMemoryCacheDecorator:
@@ -348,3 +351,63 @@ class TestCacheIntegrationExample:
         stats = get_user_by_id.stats()
         assert stats["hits"] == 9  # 10次调用 - 1次初始miss
         assert stats["misses"] == 2  # 初始 + 失效后
+
+
+class TestAutoKeyPrefix:
+    """测试缓存键前缀自动生成与冲突检测"""
+
+    def setup_method(self):
+        self._saved = CachedFunction._key_prefix_owners.copy()
+
+    def teardown_method(self):
+        CachedFunction._key_prefix_owners = self._saved
+
+    def test_auto_prefix_uses_module_and_qualname(self):
+        """默认 key_prefix 应包含 module + qualname，而非裸函数名"""
+        @cached(ttl=10)
+        def some_unique_fn(x: int):
+            return x
+
+        prefix = some_unique_fn._key_prefix
+        assert "some_unique_fn" in prefix
+        # 应包含模块路径，不能只是裸函数名
+        assert "." in prefix
+        assert prefix == _make_auto_key_prefix(some_unique_fn.__wrapped__)
+
+    def test_explicit_prefix_overrides_auto(self):
+        """手动指定 key_prefix 时应直接使用"""
+        @cached(ttl=10, key_prefix="my:custom:prefix")
+        def another_fn(x: int):
+            return x
+
+        assert another_fn._key_prefix == "my:custom:prefix"
+
+    def test_conflict_detection_warns(self, caplog):
+        """两个不同函数使用相同 key_prefix 时应发出警告"""
+        CachedFunction._key_prefix_owners.clear()
+
+        @cached(ttl=10, key_prefix="shared_prefix")
+        def func_a():
+            return "a"
+
+        with caplog.at_level(logging.WARNING, logger="yweb.cache"):
+            @cached(ttl=10, key_prefix="shared_prefix")
+            def func_b():
+                return "b"
+
+        assert any("conflict" in r.message.lower() for r in caplog.records)
+
+    def test_same_function_no_warning(self, caplog):
+        """同一函数重复装饰不应警告"""
+        CachedFunction._key_prefix_owners.clear()
+
+        def _the_func():
+            return 1
+
+        cached(ttl=10)(_the_func)
+
+        with caplog.at_level(logging.WARNING, logger="yweb.cache"):
+            cached(ttl=10)(_the_func)
+
+        conflict_warnings = [r for r in caplog.records if "conflict" in r.message.lower()]
+        assert len(conflict_warnings) == 0

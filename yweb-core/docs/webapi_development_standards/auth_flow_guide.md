@@ -30,21 +30,26 @@
    │                            └──────────┬──────────┘
    │                                       │
    │                            ┌──────────▼──────────┐
-   │                            │ 2. jwt_manager.verify_token │
+   │                            │ 2. 黑名单检查（如已配置）  │
+   │                            │    token_blacklist.is_revoked │
+   │                            └──────────┬──────────┘
+   │                                       │
+   │                            ┌──────────▼──────────┐
+   │                            │ 3. jwt_manager.verify_token │
    │                            │    验证 Token 签名和有效期 │
    │                            └──────────┬──────────┘
    │                                       │
    │                            ┌──────────▼──────────┐
-   │                            │ 3. 检查 token_type == "access" │
+   │                            │ 4. 检查 token_type == "access" │
    │                            └──────────┬──────────┘
    │                                       │
    │                            ┌──────────▼──────────┐
-   │                            │ 4. user_getter(user_id)    │
-   │                            │    查缓存 → 未命中则查数据库 │
+   │                            │ 5. user_getter(user_id)    │
+   │                            │    查缓存 → merge 回 Session │
    │                            └──────────┬──────────┘
    │                                       │
    │                            ┌──────────▼──────────┐
-   │                            │ 5. 返回 User 对象          │
+   │                            │ 6. 返回 User 对象          │
    │                            │    注入到路由函数参数       │
    │                            └──────────┬──────────┘
    │                                       │
@@ -55,11 +60,11 @@
 ### 简化流程
 
 ```
-请求 → 提取Token → 验证签名 → 检查类型 → 查询用户 → 注入参数 → 执行业务
-         ↓           ↓           ↓           ↓
-       失败?       失败?       失败?       失败?
-         ↓           ↓           ↓           ↓
-      返回401     返回401     返回401     返回401
+请求 → 提取Token → 黑名单检查 → 验证签名 → 检查类型 → 查询用户 → 注入参数 → 执行业务
+         ↓            ↓           ↓           ↓           ↓
+       失败?        已撤销?     失败?       失败?       失败?
+         ↓            ↓           ↓           ↓           ↓
+      返回401     TOKEN_REVOKED 返回401     返回401     返回401
 ```
 
 ---
@@ -70,13 +75,14 @@
 |------|------|------|
 | **`setup_auth()`** | **一站式认证设置（推荐）** | **`yweb.auth`** |
 | `OAuth2PasswordBearer` | 从请求头提取 Token | FastAPI 内置 |
+| `TokenBlacklist` | Token 撤销/黑名单检查（登出/踢出） | `yweb.auth` |
 | `JWTManager` | 验证 Token 签名和有效期 | `yweb.auth` |
 | `create_auth_dependency` | 创建认证依赖的工厂函数（底层） | `yweb.auth` |
 | `@cached` | 缓存用户查询结果 | `yweb.cache` |
 | `cache_invalidator` | 自动失效缓存 | `yweb.cache` |
-| `user_getter` | 业务层提供的获取用户函数 | 业务代码 |
+| `user_getter` | 用户获取函数（带缓存 + Session 安全） | `yweb.auth.setup` |
 
-> **推荐**：大多数项目使用 `setup_auth()` 一行完成认证配置，自动处理 JWTManager 创建、用户缓存、缓存失效注册。详见 [认证指南 - 一站式认证设置](../06_auth_guide.md#一站式认证设置-setup_auth推荐)。以下内容帮助理解底层原理。
+> **推荐**：大多数项目使用 `setup_auth()` 一行完成认证配置，自动处理 JWTManager 创建、用户缓存、缓存失效注册、黑名单检查集成、缓存对象 Session 安全（merge 回当前请求 Session）。详见 [认证指南 - 一站式认证设置](../06_auth_guide.md#一站式认证设置-setup_auth推荐)。以下内容帮助理解底层原理。
 
 ---
 
@@ -122,27 +128,35 @@ def dependency(token: Optional[str] = Depends(oauth2_scheme)):
             raise credentials_exception
         return None
     
-    # 步骤 2: 验证 Token（签名、过期时间等）
-    token_data = jwt_manager.verify_token(token)
+    # 步骤 2: 黑名单检查（如已配置 token_blacklist）
+    from .token_store import get_token_blacklist
+    blacklist = get_token_blacklist()
+    if blacklist and blacklist.is_revoked(token):
+        if auto_error:
+            raise AuthenticationException("登录已失效，请重新登录", code=ErrorCode.TOKEN_REVOKED)
+        return None
+    
+    # 步骤 3: 验证 Token（签名、过期时间等）
+    token_data = jwt_manager.verify_token(token, raise_on_expired=auto_error)
     if not token_data or not token_data.user_id:
         if auto_error:
             raise credentials_exception
         return None
     
-    # 步骤 3: 检查 Token 类型必须是 access（不能用 refresh token 访问接口）
+    # 步骤 4: 检查 Token 类型必须是 access（不能用 refresh token 访问接口）
     if token_data.token_type != "access":
         if auto_error:
             raise credentials_exception
         return None
     
-    # 步骤 4: 调用业务层函数获取用户（带缓存）
+    # 步骤 5: 调用 user_getter 获取用户（带缓存 + Session 安全 merge）
     user = user_getter(token_data.user_id)
     if not user:
         if auto_error:
             raise credentials_exception
         return None
     
-    # 步骤 5: 返回用户对象
+    # 步骤 6: 返回用户对象
     return user
 ```
 
@@ -151,28 +165,32 @@ def dependency(token: Optional[str] = Depends(oauth2_scheme)):
 | 步骤 | 检查内容 | 失败原因示例 |
 |------|----------|-------------|
 | 1 | Token 是否存在 | 请求头没带 Authorization |
-| 2 | Token 是否有效 | 签名错误、已过期、格式错误 |
-| 3 | Token 类型检查 | 误用了 refresh_token |
-| 4 | 用户是否存在 | 用户被删除、被禁用 |
+| 2 | 黑名单检查 | Token 被登出/踢出/撤销（TOKEN_REVOKED） |
+| 3 | Token 是否有效 | 签名错误、已过期、格式错误 |
+| 4 | Token 类型检查 | 误用了 refresh_token |
+| 5 | 用户是否存在 | 用户被删除、被禁用 |
 
 ### 第 3 层：user_getter（业务层策略）
 
 ```python
-@cached(ttl=60, key_prefix="user:auth")
+# orm_model=User：缓存命中时自动 merge 回 Session
+@cached(ttl=60, key_prefix="user:auth", orm_model=User)
 def get_user_by_id(user_id: int) -> Optional[User]:
     """通过用户 ID 获取用户（带缓存）"""
-    user = User.get_by_id(user_id)
+    user = User.query.options(
+        selectinload(User.roles)
+    ).filter_by(id=user_id).first()
     if user and user.is_active:
         return user
     return None
 
-# 注册自动缓存失效
+# 默认监听 M2M 集合变更（user.roles 增删时也失效）
 cache_invalidator.register(User, get_user_by_id)
 ```
 
 **这是业务层提供的「策略函数」，职责是：**
-1. 根据 `user_id` 查缓存（命中则直接返回）
-2. 缓存未命中则查数据库
+1. 根据 `user_id` 查缓存（命中时自动 merge 回 Session）
+2. 缓存未命中则查数据库（预加载 M2M 关系）
 3. 检查用户是否激活（`is_active`）
 4. 返回用户对象或 None
 
@@ -364,7 +382,7 @@ eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTYiLCJ0eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzA2MjA
 |--------|------|
 | ✅ 签名验证 | 防止篡改 |
 | ✅ 过期检查 | `exp` 字段 |
-| ✅ 黑名单检查 | 如果实现了登出功能 |
+| ✅ 黑名单检查 | `setup_auth(token_blacklist=True)` 自动集成 |
 
 ---
 
