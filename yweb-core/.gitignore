@@ -50,6 +50,9 @@ logs/
 dist/
 build/
 
+# Build temporary directories (matches package name with any version)
+yweb-[0-9]*/
+
 # PyPI credentials
 .pypirc
 
