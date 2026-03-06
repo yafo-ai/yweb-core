@@ -350,6 +350,79 @@ def get_user_with_dept(user_id: int):
 
 **两条路径自动生效，用户只需写 `invalidate_on=Model`，无需区分查询类型。**
 
+### 关联数据变更的缓存失效
+
+自动失效默认只覆盖**注册模型本身**的变更和 **ManyToMany 关联增删**。以下两种场景需要通过 `invalidate_on` 字典显式声明：
+
+#### 场景 1：OneToMany 子表变更影响父表缓存
+
+```python
+# 缓存 Order，预加载子表 OrderItem
+@cached(ttl=60, orm_model=Order, invalidate_on=Order)
+def get_order(order_id: int):
+    return Order.query.options(selectinload(Order.items)).filter_by(id=order_id).first()
+```
+
+**问题**：修改某条 OrderItem 后，Order 的缓存**不会失效**，因为：
+
+- `invalidate_on=Order` 只监听 `Order` 模型的 ORM 事件
+- `watch_relationships` 只监听 ManyToMany（有中间表的关系），不监听 OneToMany
+- 依赖追踪只扫描结果顶层对象（`Order` 实例），不递归扫描嵌套关系
+
+**解决：在 `invalidate_on` 中声明子表，并提供 `key_extractor` 映射回父表 ID**
+
+```python
+@cached(ttl=60, orm_model=Order, invalidate_on={
+    Order: lambda o: o.id,
+    OrderItem: lambda item: item.order_id,  # 子表变更 → 用 order_id 失效父表
+})
+def get_order(order_id: int):
+    return Order.query.options(selectinload(Order.items)).filter_by(id=order_id).first()
+```
+
+这样 `OrderItem` 的增删改都会自动提取 `order_id`，调用 `get_order.invalidate(order_id)` 精确失效。
+
+#### 场景 2：ManyToMany 关联实体的属性变更
+
+```python
+@cached(ttl=60, orm_model=User, invalidate_on=User)
+def get_user(user_id: int):
+    return User.query.options(selectinload(User.roles)).filter_by(id=user_id).first()
+
+cache_invalidator.register(User, get_user)  # watch_relationships 默认 True
+```
+
+**已自动覆盖的场景**：
+
+- `user.roles.append(role)` — M2M 集合 append 事件 → 自动失效 ✅
+- `user.roles.remove(role)` — M2M 集合 remove 事件 → 自动失效 ✅
+
+**未覆盖的场景**：
+
+- `role.name = "新名字"; role.update()` — Role 自身属性变更，不会触发 User 缓存失效 ❌
+
+如果需要覆盖 Role 属性变更，同样用 `invalidate_on` 字典声明：
+
+```python
+@cached(ttl=60, orm_model=User, invalidate_on={
+    User: lambda u: u.id,
+    Role: lambda role: [u.id for u in role.users],  # 反查所有关联 User
+})
+def get_user(user_id: int):
+    return User.query.options(selectinload(User.roles)).filter_by(id=user_id).first()
+```
+
+#### 覆盖范围速查表
+
+| 变更类型 | 示例 | 默认是否失效 | 需要额外配置 |
+|---------|------|:-----------:|------------|
+| 实体本身变更 | `order.update()` | ✅ | 无 |
+| M2M 关联增删 | `user.roles.append(role)` | ✅ | 无（`watch_relationships=True`） |
+| OneToMany 子表变更 | `order_item.update()` | ❌ | `invalidate_on={OrderItem: lambda i: i.order_id}` |
+| M2M 关联实体属性变更 | `role.name = "x"` | ❌ | `invalidate_on={Role: lambda r: [u.id for u in r.users]}` |
+
+> **推荐做法**：大多数场景只需要 `invalidate_on=Model`；涉及子表或关联实体属性变更时，使用 `invalidate_on` 字典声明映射关系，这是最精确且零侵入的方案。
+
 ### 手动注册方式（备选）
 
 如果不使用 `invalidate_on` 参数，也可以手动调用 `cache_invalidator.register()` 注册：
