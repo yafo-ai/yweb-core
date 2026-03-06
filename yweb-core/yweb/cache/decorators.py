@@ -446,6 +446,9 @@ class CachedFunction:
         
         当 orm_model 已配置时，缓存命中后自动将 detached ORM 对象
         merge 回当前 Session（load=False，零额外查询）。
+        
+        当 invalidate_on 已配置时，缓存写入后自动扫描结果中的实体，
+        建立反向索引以支持列表查询的精确缓存失效。
         """
         cache_key = self._build_key(args, kwargs)
         
@@ -468,8 +471,19 @@ class CachedFunction:
         # 只缓存非 None 结果
         if result is not None:
             self._backend.set(cache_key, result, self._ttl)
+            self._track_deps(cache_key, result)
         
         return result
+    
+    def _track_deps(self, cache_key: str, result: Any) -> None:
+        """缓存写入后，将结果中的实体注册到反向索引"""
+        if self._invalidate_on is None:
+            return
+        try:
+            from .invalidation import cache_invalidator
+            cache_invalidator.track_dependencies(self, cache_key, result)
+        except Exception:
+            pass
     
     def _ensure_session(self, obj: Any) -> Any:
         """将 detached ORM 对象 merge 回当前 Session

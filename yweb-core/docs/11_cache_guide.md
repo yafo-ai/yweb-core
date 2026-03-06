@@ -316,37 +316,39 @@ def get_user_with_dept(user_id: int):
 
 ### 工作原理
 
-自动缓存失效的完整流程：
+自动缓存失效采用**双路径**机制，同时覆盖单实体查询和列表查询：
 
-1. **装饰器解析** `invalidate_on` 参数（单模型/列表/字典）
-2. **自动注册** 调用 `cache_invalidator.register()` 监听模型事件
-3. **事件触发** ORM 模型 `update/delete/insert` 时触发 SQLAlchemy 事件
-4. **Key 提取** 事件处理器通过 `key_extractor` 从模型实例提取缓存键
-5. **缓存失效** 调用 `cached_func.invalidate(key)` 清除对应缓存
+#### 路径 1：key_extractor 精确失效（单实体查询）
+
+适用于 `get_user(user_id)` 等参数就是实体 ID 的场景：
+
+1. ORM 模型变更时触发 SQLAlchemy 事件
+2. `key_extractor` 从实例提取 ID → 调用 `func.invalidate(id)`
+
+#### 路径 2：依赖追踪失效（列表查询）
+
+适用于 `get_orders(user_id, page)` 等参数不是实体 ID 的场景：
+
+1. **缓存写入时**：自动扫描结果中的实体实例，建立反向索引 `(Model, entity_id) → {cache_keys}`
+2. **实体变更时**：查反向索引，精确失效包含该实体的缓存条目
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    自动缓存失效流程                          │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                  自动缓存失效（双路径）                         │
+└──────────────────────────────────────────────────────────────┘
 
-  业务代码                   SQLAlchemy                  缓存
-      │                          │                        │
-      │ user.name = "新名字"     │                        │
-      │ user.update()            │                        │
-      │─────────────────────────►│                        │
-      │                          │                        │
-      │                          │ 触发 after_update      │
-      │                          │────────────────────────►
-      │                          │                        │
-      │                          │    key_extractor(user) │
-      │                          │    → user.id = 123     │
-      │                          │                        │
-      │                          │  get_user.invalidate(123)
-      │                          │                        │
-      │                          │                        │
-      │   下次请求自动从数据库获取  │                        │
-      │◄ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─│                        │
+  路径 1（单实体）:
+      user.update()  → after_update → key_extractor(user) → get_user.invalidate(123)
+
+  路径 2（列表查询）:
+      缓存写入时: get_orders(1, 1) → [Order(1), Order(2)] → 反向索引:
+                  (Order, 1) → {"get_orders:1:1"}
+                  (Order, 2) → {"get_orders:1:1"}
+
+      Order(2) 变更时: 查反向索引 → 精确删除 "get_orders:1:1"
 ```
+
+**两条路径自动生效，用户只需写 `invalidate_on=Model`，无需区分查询类型。**
 
 ### 手动注册方式（备选）
 
@@ -537,72 +539,39 @@ cache_invalidator.register(
 )
 ```
 
-### 多实体组合缓存的设计考量
+### 列表查询与多实体缓存
 
-当缓存函数涉及多个实体的组合查询时，自动失效面临挑战：
+`invalidate_on` 同时支持单实体查询和列表查询，**无需额外配置**：
 
 ```python
-@cached(ttl=300)
+# 单实体查询 — key_extractor 路径自动命中
+@cached(ttl=60, invalidate_on=Order)
+def get_order(order_id: int):
+    return Order.get(order_id)
+
+# 列表查询 — 依赖追踪路径自动命中
+@cached(ttl=60, invalidate_on=Order)
+def get_orders(user_id: int, page: int):
+    return Order.query.filter_by(user_id=user_id).paginate(page)
+
+# 多模型组合查询
+@cached(ttl=300, invalidate_on=[User, Department])
 def get_user_with_dept(user_id: int):
     user = User.get(user_id)
     dept = Department.get(user.dept_id)
-    return {"user": user, "dept": dept}  # 组合多个实体
+    return {"user": user, "dept": dept}
 ```
 
-**问题**：User 变更能自动失效，但 Department 变更时如何失效？
+**列表查询示例**：`get_orders(1, 1)` 返回 `[Order(1), Order(2), Order(3)]` 时，框架自动建立反向索引。当 `Order(2)` 被更新，只有包含 `Order(2)` 的缓存条目被精确失效，其他用户的列表缓存不受影响。
 
-#### 当前方案：依赖声明式（invalidate_on）
+#### 支持的结果类型
 
-```python
-@cached(ttl=300, invalidate_on={
-    User: lambda user: user.id,
-    Department: lambda dept: [e.user_id for e in dept.employees]  # 返回列表批量失效
-})
-def get_user_with_dept(user_id: int):
-    ...
-```
-
-**优点**：
-- ✅ 使用极简：声明依赖模型即可
-- ✅ 无需关心标签命名
-- ✅ 实现较简单：复用现有 `cache_invalidator`
-
-**缺点**：
-- ❌ **Key 提取难题**：Department 变更时，需要自定义 `key_extractor` 从关联关系提取所有相关的 `user_id`
-- ❌ **可能过度失效**：如果无法精准提取 key，只能 `clear()` 整个缓存
-- ❌ **复杂关系难以处理**：多层嵌套关系难以自动推断
-
-#### 备选方案：标签式缓存失效（Tag-based）
-
-业界常用方案（Django Cache、Spring Cache、Redis 都支持），提供更精准的失效控制：
-
-```python
-# 概念示例（yweb 暂未实现）
-@cached(ttl=300, tags=lambda user_id: [f"user:{user_id}", f"dept:{get_dept_id(user_id)}"])
-def get_user_with_dept(user_id: int):
-    ...
-
-# Department 变更时按标签失效
-cache_invalidator.invalidate_by_tag(f"dept:{dept.id}")  # 精准失效
-```
-
-**优点**：
-- ✅ **失效精准**：只失效真正关联的缓存
-- ✅ **灵活**：标签可以跨模型、跨业务任意组合
-- ✅ **业界成熟**：Django Cache、Spring Cache、Redis 都支持
-
-**缺点**：
-- ❌ 标签需要**运行时动态生成**，可能需要额外查询（如 `get_dept_id(user_id)`）
-- ❌ 标签命名需要规范，否则容易混乱
-- ❌ 实现复杂：需要维护 `tag → [cache_keys]` 的反向映射
-
-#### 实践建议
-
-| 场景 | 推荐方案 |
-|------|---------|
-| 单模型缓存 | `invalidate_on=Model`（简单够用） |
-| 多模型组合、关系简单 | `invalidate_on={Model: key_extractor}` |
-| 复杂关联、需要精准控制 | 手动调用 `invalidate()` / `refresh()` |
+| 结果类型 | 示例 | 扫描行为 |
+|---------|------|---------|
+| 单对象 | `Order(id=1)` | 直接提取 |
+| 列表/元组 | `[Order(1), Order(2)]` | 遍历每个元素 |
+| 分页对象 | `Page(items=[...])` | 遍历 `items` 属性 |
+| 非实体类型 | `dict`, `str`, `int` | 跳过（不追踪） |
 
 ---
 
@@ -1305,12 +1274,23 @@ def get_user(user_id: int):
 |------|------|
 | `register(model, func, key_extractor, events, watch_relationships)` | 注册模型与缓存函数的关联 |
 | `unregister(model, func)` | 取消注册 |
+| `track_dependencies(func, cache_key, result)` | 扫描结果建立反向索引（`@cached` 内部自动调用） |
 
 **`register` 关键参数：**
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `watch_relationships` | bool | 默认 True。自动监听模型上所有 ManyToMany 集合的 append/remove 事件，集合变更时触发缓存失效。模型无 M2M 关系时零开销 |
+
+**失效机制（双路径，自动选择）：**
+
+| 路径 | 触发条件 | 适用场景 |
+|------|---------|---------|
+| key_extractor 精确失效 | 实体变更时，用 `key_extractor(entity)` 作为参数调用 `func.invalidate()` | `get_user(user_id)` 等参数即 ID 的函数 |
+| 依赖追踪失效 | 缓存写入时扫描结果中的实体，建立反向索引；实体变更时按索引精确失效 | `get_orders(user_id, page)` 等列表/组合查询 |
+
+| 其他方法 | 说明 |
+|------|------|
 | `get_registrations(model)` | 获取注册信息 |
 | `enable()` | 启用自动失效 |
 | `disable()` | 禁用自动失效 |

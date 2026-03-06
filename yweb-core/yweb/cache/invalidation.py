@@ -27,46 +27,73 @@ from yweb.log import get_logger
 logger = get_logger("yweb.cache.invalidation")
 
 
+def _extract_entities(result: Any, model_classes: Set[Type]) -> List[tuple]:
+    """从缓存结果中提取 ORM 实体实例
+
+    扫描单对象、列表、分页对象等结构，返回 [(model_class, entity_id), ...] 列表。
+    只提取 model_classes 中注册过的模型类型。
+    """
+    entities = []
+
+    def _check(obj):
+        obj_type = type(obj)
+        for mc in model_classes:
+            if obj_type is mc or (isinstance(obj, type) is False and isinstance(obj, mc)):
+                eid = getattr(obj, "id", None)
+                if eid is not None:
+                    entities.append((mc, eid))
+                return
+
+    if result is None:
+        return entities
+
+    if isinstance(result, (list, tuple, set, frozenset)):
+        for item in result:
+            _check(item)
+    elif hasattr(result, "items") and isinstance(result.items, (list, tuple)):
+        for item in result.items:
+            _check(item)
+    else:
+        _check(result)
+
+    return entities
+
+
 class CacheInvalidator:
     """缓存自动失效管理器
     
     监听 SQLAlchemy 模型事件，自动失效相关缓存。
     
-    支持的事件:
-        - after_update: 模型更新后
-        - after_delete: 模型删除后
-        - after_insert: 模型插入后（可选）
+    支持两种失效策略：
+    
+    1. **key_extractor 精确失效**（默认）：从变更实体提取缓存键参数，
+       调用 ``func.invalidate(key)``。适用于 ``get_user(user_id)`` 等
+       参数就是实体 ID 的场景。
+    
+    2. **依赖追踪失效**（自动启用）：缓存写入时扫描结果中包含的实体，
+       建立反向索引 ``(Model, entity_id) → {cache_keys}``。实体变更时
+       精确失效包含该实体的所有缓存条目。适用于列表查询等参数不是实体 ID
+       的场景，无需额外配置。
     
     使用示例:
-        # 基本用法
+        # 单实体查询 — key_extractor 直接命中
         cache_invalidator.register(User, get_user_by_id)
         
-        # 自定义 key 提取器
-        cache_invalidator.register(
-            User, 
-            get_user_by_username,
-            key_extractor=lambda user: user.username
-        )
-        
-        # 监听特定事件
-        cache_invalidator.register(
-            User, 
-            get_user_by_id,
-            events=("after_update",)  # 只在更新时失效
-        )
-        
-        # 注册多个缓存函数
-        cache_invalidator.register(User, get_user_by_id)
-        cache_invalidator.register(User, get_user_by_username, 
-                                   key_extractor=lambda u: u.username)
+        # 列表查询 — 依赖追踪自动处理
+        cache_invalidator.register(Order, get_orders)
+        # Order 变更时，自动失效所有包含该 Order 的缓存条目
     """
     
     def __init__(self):
         self._registrations: Dict[Type, List[dict]] = {}
-        self._listened_events: Dict[Type, Set[str]] = {}  # model -> 已注册监听的事件名集合
-        self._watched_relationships: Set[str] = set()  # "Model.rel_name" 去重
+        self._listened_events: Dict[Type, Set[str]] = {}
+        self._watched_relationships: Set[str] = set()
         self._lock = threading.RLock()
         self._enabled = True
+        # 反向索引: (model_class, entity_id) → set of (cached_func_id, raw_cache_key)
+        self._dep_index: Dict[tuple, Set[tuple]] = {}
+        # func id → CachedFunction 引用
+        self._tracked_funcs: Dict[int, Any] = {}
     
     def register(
         self,
@@ -232,49 +259,102 @@ class CacheInvalidator:
     ):
         """为目标对象执行缓存失效
         
-        支持 key_extractor 返回单个值或列表：
-        - 单个值：失效单个缓存
-        - 列表：批量失效多个缓存（用于关联模型场景）
-        
-        event_name 为 "collection_change" 时跳过事件过滤，
-        因为 M2M 集合变更应触发所有已注册的缓存函数失效。
+        双路径失效：
+        1. key_extractor 精确失效（参数即 ID 的场景）
+        2. 反向索引失效（列表查询等依赖追踪场景）
         """
         if not self._enabled:
             return
         
-        if model not in self._registrations:
-            return
+        entity_id = getattr(target, "id", None)
         
-        for reg in self._registrations[model]:
-            # collection_change 始终触发（M2M 集合变更）
-            if event_name != "collection_change":
-                if event_name not in reg.get("events", ()):
-                    continue
-            
-            try:
-                # 提取缓存键（可能是单个值或列表）
-                keys = reg["key_extractor"](target)
-                func = reg["func"]
+        # 路径 1: key_extractor 精确失效
+        if model in self._registrations:
+            for reg in self._registrations[model]:
+                if event_name != "collection_change":
+                    if event_name not in reg.get("events", ()):
+                        continue
                 
-                # 支持返回列表（批量失效）
-                if isinstance(keys, (list, tuple)):
-                    for key in keys:
-                        func.invalidate(key)
-                    logger.debug(
-                        f"Auto-invalidated cache (batch): "
-                        f"{func.__name__}({len(keys)} keys) on {event_name}"
-                    )
-                else:
-                    # 单个值
-                    func.invalidate(keys)
+                try:
+                    keys = reg["key_extractor"](target)
+                    func = reg["func"]
+                    
+                    if isinstance(keys, (list, tuple)):
+                        for key in keys:
+                            func.invalidate(key)
+                    else:
+                        func.invalidate(keys)
                     logger.debug(
                         f"Auto-invalidated cache: "
                         f"{func.__name__}({keys}) on {event_name}"
                     )
-            except Exception as e:
-                logger.warning(
-                    f"Failed to invalidate cache for {model.__name__}: {e}"
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to invalidate cache for {model.__name__}: {e}"
+                    )
+        
+        # 路径 2: 反向索引失效（依赖追踪）
+        if entity_id is not None:
+            self._invalidate_by_dep(model, entity_id)
+    
+    def track_dependencies(
+        self, cached_func: Any, cache_key: str, result: Any
+    ) -> None:
+        """扫描缓存结果，建立 (Model, entity_id) → cache_key 的反向索引
+        
+        由 CachedFunction.__call__ 在缓存写入后调用。
+        """
+        if not self._registrations:
+            return
+        
+        registered_models = set(self._registrations.keys())
+        entities = _extract_entities(result, registered_models)
+        if not entities:
+            return
+        
+        func_id = id(cached_func)
+        self._tracked_funcs[func_id] = cached_func
+        
+        with self._lock:
+            for model_cls, entity_id in entities:
+                dep_key = (model_cls, entity_id)
+                if dep_key not in self._dep_index:
+                    self._dep_index[dep_key] = set()
+                self._dep_index[dep_key].add((func_id, cache_key))
+    
+    def _invalidate_by_dep(self, model: Type, entity_id: Any) -> None:
+        """通过反向索引失效所有包含指定实体的缓存条目"""
+        dep_key = (model, entity_id)
+        
+        with self._lock:
+            entries = self._dep_index.pop(dep_key, None)
+        
+        if not entries:
+            return
+        
+        for func_id, cache_key in entries:
+            func = self._tracked_funcs.get(func_id)
+            if func is None:
+                continue
+            try:
+                func._backend.delete(cache_key)
+                logger.debug(
+                    f"Dep-invalidated: {func.__name__} key={cache_key} "
+                    f"(dep={model.__name__}#{entity_id})"
                 )
+            except Exception as e:
+                logger.warning(f"Dep-invalidation failed: {e}")
+    
+    def remove_dep_entries(self, cache_key: str) -> None:
+        """清理反向索引中指定 cache_key 的条目（缓存条目被淘汰时调用）"""
+        with self._lock:
+            empty_keys = []
+            for dep_key, entries in self._dep_index.items():
+                entries.discard(cache_key)
+                if not entries:
+                    empty_keys.append(dep_key)
+            for dk in empty_keys:
+                del self._dep_index[dk]
     
     def unregister(
         self, 
@@ -360,8 +440,8 @@ class CacheInvalidator:
         with self._lock:
             self._registrations.clear()
             self._watched_relationships.clear()
-            # 注意：SQLAlchemy 事件监听器不会被移除
-            # 但由于 _registrations 为空，handler 不会执行任何操作
+            self._dep_index.clear()
+            self._tracked_funcs.clear()
             logger.debug("All cache invalidation registrations cleared")
 
 
