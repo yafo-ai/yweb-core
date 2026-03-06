@@ -1262,10 +1262,12 @@ cache_invalidator.register(Product, get_product)
 
 | 参数 | 作用 | 解决的问题 |
 |------|------|-----------|
-| `orm_model` | 缓存命中时自动 `session.merge(load=False)` | DetachedInstanceError |
+| `orm_model` | 缓存写入时 pickle 快照 + 命中时自动 `session.merge(load=False)` | expire_on_commit 清空属性 + DetachedInstanceError |
 | `watch_relationships` | 监听 M2M 集合 append/remove 事件 | M2M 变更后缓存脏数据 |
 | `selectinload(...)` | 预加载关系数据进缓存 | 每次命中都额外查询关系 |
 
+> **为什么需要 pickle 快照？** SQLAlchemy 默认 `expire_on_commit=True`，请求结束时 `session.commit()` 会从对象 `__dict__` 中 pop 掉所有属性值。如果 Memory 后端直接存储对象引用，commit 后缓存引用的属性就被清空了，后续命中等于白缓存。`orm_model` 在缓存写入时自动通过 pickle 创建独立副本（与 Redis 后端行为一致），使缓存完全不受 `expire_on_commit` 影响。
+>
 > **职责分离**：`orm_model` 和 `watch_relationships` 是缓存层的通用能力；预加载什么关系是业务层的决策。
 
 ### 7. 多实例部署注意事项

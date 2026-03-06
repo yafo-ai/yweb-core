@@ -1,7 +1,8 @@
 """ORM 对象缓存测试
 
-测试 @cached(orm_model=...) 的 Session merge 机制
-和 cache_invalidator 的 watch_relationships（M2M 集合变更失效）。
+测试 @cached(orm_model=...) 的 Session merge 机制、
+expire_on_commit 保护（pickle 快照）、
+cache_invalidator 的 watch_relationships（M2M 集合变更失效）。
 """
 
 import pytest
@@ -9,6 +10,7 @@ from unittest.mock import MagicMock, patch, PropertyMock
 from types import SimpleNamespace
 
 from yweb.cache import cached, CacheInvalidator
+from yweb.cache.backends import MemoryBackend
 
 
 class TestCachedOrmModel:
@@ -60,7 +62,7 @@ class TestCachedOrmModel:
             result = cf(1)
 
         mock_model.query.session.merge.assert_not_called()
-        assert result is user
+        assert result.id == user.id
 
     def test_no_orm_model_returns_raw_value(self):
         """不指定 orm_model 时直接返回缓存值"""
@@ -69,6 +71,78 @@ class TestCachedOrmModel:
         cf(1)
         result = cf(1)
         assert result.id == 1
+
+
+class TestExpireOnCommitProtection:
+    """测试 Memory 后端 + orm_model 的 pickle 快照保护"""
+
+    def test_cached_copy_independent_of_original(self):
+        """缓存的副本应是独立对象，修改原始不影响缓存"""
+        call_count = 0
+
+        @cached(ttl=60, orm_model=object)
+        def get_item(item_id: int):
+            nonlocal call_count
+            call_count += 1
+            obj = SimpleNamespace(id=item_id, name="original")
+            return obj
+
+        result1 = get_item(1)
+        assert result1.name == "original"
+
+        cached_obj = get_item._backend.get(get_item._build_key((1,), {}))
+        assert cached_obj is not result1, "缓存应存储独立副本，而非原始引用"
+        assert cached_obj.name == "original"
+
+    def test_expire_on_commit_simulation(self):
+        """模拟 expire_on_commit 清空原始 __dict__ 后缓存仍可用"""
+        call_count = 0
+        original_ref = None
+
+        @cached(ttl=60, orm_model=object)
+        def get_item(item_id: int):
+            nonlocal call_count, original_ref
+            call_count += 1
+            obj = SimpleNamespace(id=item_id, name="alice", score=100)
+            original_ref = obj
+            return obj
+
+        get_item(1)
+        assert call_count == 1
+
+        # 模拟 expire_on_commit: SQLAlchemy 会 pop 掉 __dict__ 中的属性值
+        original_ref.__dict__.pop("name", None)
+        original_ref.__dict__.pop("score", None)
+
+        # 缓存命中 — 应返回 pickle 快照（属性完整）
+        result = get_item(1)
+        assert call_count == 1, "应命中缓存，不重新查询"
+        assert result.name == "alice"
+        assert result.score == 100
+
+    def test_no_orm_model_stores_reference(self):
+        """不指定 orm_model 时应存储引用（原始行为）"""
+        @cached(ttl=60)
+        def get_item(item_id: int):
+            return SimpleNamespace(id=item_id, name="ref")
+
+        result = get_item(1)
+        cached_obj = get_item._backend.get(get_item._build_key((1,), {}))
+        assert cached_obj is result, "无 orm_model 时应存储原始引用"
+
+    def test_snapshot_preserves_nested_collections(self):
+        """pickle 快照应保留嵌套集合（模拟 eager-loaded relationships）"""
+        @cached(ttl=60, orm_model=object)
+        def get_user(uid: int):
+            roles = [SimpleNamespace(id=1, name="admin"), SimpleNamespace(id=2, name="editor")]
+            return SimpleNamespace(id=uid, username="alice", roles=roles)
+
+        get_user(1)
+
+        cached_obj = get_user._backend.get(get_user._build_key((1,), {}))
+        assert len(cached_obj.roles) == 2
+        assert cached_obj.roles[0].name == "admin"
+        assert cached_obj.roles[1].name == "editor"
 
 
 class TestWatchRelationships:

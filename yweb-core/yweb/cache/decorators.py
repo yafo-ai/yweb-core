@@ -470,7 +470,8 @@ class CachedFunction:
         
         # 只缓存非 None 结果
         if result is not None:
-            self._backend.set(cache_key, result, self._ttl)
+            cache_value = self._snapshot_for_cache(result)
+            self._backend.set(cache_key, cache_value, self._ttl)
             self._track_deps(cache_key, result)
         
         return result
@@ -484,6 +485,28 @@ class CachedFunction:
             cache_invalidator.track_dependencies(self, cache_key, result)
         except Exception:
             pass
+    
+    def _snapshot_for_cache(self, obj: Any) -> Any:
+        """为 Memory 缓存创建独立快照，防止 expire_on_commit 破坏缓存
+        
+        SQLAlchemy 默认 expire_on_commit=True，session.commit() 后会从
+        对象 __dict__ 中 pop 掉所有属性值。Memory 后端存储的是对象引用，
+        commit 后缓存引用指向的属性就被清空了，后续 merge(load=False)
+        复制到的是空值，导致访问任何属性都触发数据库查询。
+        
+        通过 pickle 序列化/反序列化创建独立副本（与 Redis 后端行为一致），
+        副本不在任何 Session 中，expire_on_commit 无法影响。
+        
+        仅在 Memory 后端 + orm_model 时启用；Redis 后端自身的序列化已天然隔离。
+        """
+        if self._orm_model is None or not isinstance(self._backend, MemoryBackend):
+            return obj
+        try:
+            import pickle
+            return pickle.loads(pickle.dumps(obj))
+        except Exception as e:
+            logger.warning(f"Failed to snapshot ORM object for cache: {e}")
+            return obj
     
     def _ensure_session(self, obj: Any) -> Any:
         """将 detached ORM 对象 merge 回当前 Session
