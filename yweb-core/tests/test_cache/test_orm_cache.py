@@ -8,9 +8,82 @@ cache_invalidator 的 watch_relationships（M2M 集合变更失效）。
 import pytest
 from unittest.mock import MagicMock, patch, PropertyMock
 from types import SimpleNamespace
+from sqlalchemy import Column, ForeignKey, Integer, String, Table, event
+from sqlalchemy.orm import (
+    Mapped,
+    mapped_column,
+    relationship,
+    scoped_session,
+    selectinload,
+    sessionmaker,
+)
 
 from yweb.cache import cached, CacheInvalidator
 from yweb.cache.backends import MemoryBackend
+from yweb.orm import BaseModel, CoreModel
+
+
+class CachedOrderModel(BaseModel):
+    """用于缓存集成测试的订单模型"""
+    __tablename__ = "test_cache_orders"
+    __table_args__ = {"extend_existing": True}
+
+    order_name: Mapped[str] = mapped_column(String(100))
+    items = relationship(
+        "CachedOrderItemModel",
+        back_populates="order",
+        order_by="CachedOrderItemModel.id",
+    )
+
+
+class CachedOrderItemModel(BaseModel):
+    """用于缓存集成测试的订单项模型"""
+    __tablename__ = "test_cache_order_items"
+    __table_args__ = {"extend_existing": True}
+
+    item_name: Mapped[str] = mapped_column(String(100))
+    order_id = Column(
+        Integer,
+        ForeignKey("test_cache_orders.id"),
+        nullable=False,
+    )
+    order = relationship("CachedOrderModel", back_populates="items")
+
+
+cached_user_role_table = Table(
+    "test_cache_user_role",
+    BaseModel.metadata,
+    Column("user_id", Integer, ForeignKey("test_cache_users.id"), primary_key=True),
+    Column("role_id", Integer, ForeignKey("test_cache_roles.id"), primary_key=True),
+    extend_existing=True,
+)
+
+
+class CachedUserModel(BaseModel):
+    """用于缓存集成测试的用户模型"""
+    __tablename__ = "test_cache_users"
+    __table_args__ = {"extend_existing": True}
+
+    username: Mapped[str] = mapped_column(String(100))
+    roles = relationship(
+        "CachedRoleModel",
+        secondary=cached_user_role_table,
+        back_populates="users",
+        order_by="CachedRoleModel.id",
+    )
+
+
+class CachedRoleModel(BaseModel):
+    """用于缓存集成测试的角色模型"""
+    __tablename__ = "test_cache_roles"
+    __table_args__ = {"extend_existing": True}
+
+    role_name: Mapped[str] = mapped_column(String(100))
+    users = relationship(
+        "CachedUserModel",
+        secondary=cached_user_role_table,
+        back_populates="roles",
+    )
 
 
 class TestCachedOrmModel:
@@ -143,6 +216,235 @@ class TestExpireOnCommitProtection:
         assert len(cached_obj.roles) == 2
         assert cached_obj.roles[0].name == "admin"
         assert cached_obj.roles[1].name == "editor"
+
+
+class TestCachedOrmModelIntegration:
+    """测试真实 ORM 对象缓存命中时不发 SQL"""
+
+    @pytest.fixture(autouse=True)
+    def setup_db(self, memory_engine):
+        """初始化测试数据库和 Session"""
+        BaseModel.metadata.create_all(bind=memory_engine)
+        session_local = sessionmaker(
+            autocommit=False,
+            autoflush=False,
+            bind=memory_engine,
+        )
+        self.session_scope = scoped_session(session_local)
+        CoreModel.query = self.session_scope.query_property()
+        yield
+        self.session_scope.remove()
+
+    @pytest.fixture
+    def sql_counter(self, memory_engine):
+        """统计测试过程中执行的 DML/SELECT SQL 数量"""
+        counter = {"count": 0}
+
+        def before_cursor_execute(
+            conn, cursor, statement, parameters, context, executemany
+        ):
+            sql = statement.lstrip().upper()
+            if sql.startswith(("SELECT", "INSERT", "UPDATE", "DELETE")):
+                counter["count"] += 1
+
+        event.listen(memory_engine, "before_cursor_execute", before_cursor_execute)
+        try:
+            yield counter
+        finally:
+            event.remove(
+                memory_engine, "before_cursor_execute", before_cursor_execute
+            )
+
+    def test_cached_scalar_attribute_hit_does_not_query_database(self, sql_counter):
+        """缓存命中后读取 ORM 标量属性不应再查询数据库"""
+        order = CachedOrderModel(order_name="订单A")
+        order.add(True)
+        order_id = order.id
+        call_count = 0
+
+        @cached(
+            ttl=60,
+            orm_model=CachedOrderModel,
+            invalidate_on=CachedOrderModel,
+        )
+        def get_order(target_order_id: int):
+            nonlocal call_count
+            call_count += 1
+            return CachedOrderModel.query.filter_by(id=target_order_id).first()
+
+        first_result = get_order(order_id)
+        assert first_result.order_name == "订单A"
+        assert call_count == 1
+
+        self.session_scope.remove()
+        sql_counter["count"] = 0
+
+        cached_result = get_order(order_id)
+        assert cached_result.order_name == "订单A"
+        assert call_count == 1, "第二次应命中缓存，不应再次执行查询函数"
+        assert sql_counter["count"] == 0, "缓存命中后读取标量属性不应发 SQL"
+
+    def test_cached_object_is_refreshed_after_self_attribute_update(self):
+        """对象自身字段更新后应失效缓存并返回新值"""
+        order = CachedOrderModel(order_name="订单旧名")
+        order.add(True)
+        order_id = order.id
+        call_count = 0
+
+        @cached(
+            ttl=60,
+            orm_model=CachedOrderModel,
+            invalidate_on=CachedOrderModel,
+        )
+        def get_order(target_order_id: int):
+            nonlocal call_count
+            call_count += 1
+            return CachedOrderModel.query.filter_by(id=target_order_id).first()
+
+        first_result = get_order(order_id)
+        assert first_result.order_name == "订单旧名"
+        get_order(order_id)
+        assert call_count == 1, "更新前第二次应命中缓存"
+
+        order_to_update = CachedOrderModel.query.filter_by(id=order_id).first()
+        order_to_update.order_name = "订单新名"
+        order_to_update.update(True)
+
+        self.session_scope.remove()
+
+        refreshed_result = get_order(order_id)
+        assert call_count == 2, "对象更新后应失效缓存并重新查询"
+        assert refreshed_result.order_name == "订单新名"
+
+    def test_cached_preloaded_children_hit_does_not_query_database(self, sql_counter):
+        """缓存命中后读取预加载的一对多关系不应再查询数据库"""
+        order = CachedOrderModel(order_name="订单B")
+        order.add(True)
+        order_id = order.id
+        CachedOrderItemModel(item_name="商品1", order_id=order_id).add(True)
+        CachedOrderItemModel(item_name="商品2", order_id=order_id).add(True)
+        call_count = 0
+
+        @cached(
+            ttl=60,
+            orm_model=CachedOrderModel,
+            invalidate_on={
+                CachedOrderModel: lambda current_order: current_order.id,
+                CachedOrderItemModel: lambda item: item.order_id,
+            },
+        )
+        def get_order_with_items(target_order_id: int):
+            nonlocal call_count
+            call_count += 1
+            return (
+                CachedOrderModel.query.options(
+                    selectinload(CachedOrderModel.items)
+                )
+                .filter_by(id=target_order_id)
+                .first()
+            )
+
+        first_result = get_order_with_items(order_id)
+        assert [item.item_name for item in first_result.items] == ["商品1", "商品2"]
+        assert call_count == 1
+
+        self.session_scope.remove()
+        sql_counter["count"] = 0
+
+        cached_result = get_order_with_items(order_id)
+        assert [item.item_name for item in cached_result.items] == ["商品1", "商品2"]
+        assert call_count == 1, "第二次应命中缓存，不应再次执行查询函数"
+        assert sql_counter["count"] == 0, "缓存命中后读取预加载关系不应发 SQL"
+
+    def test_cached_parent_is_refreshed_after_onetomany_child_update(self):
+        """一对多子对象字段更新后应失效父对象缓存"""
+        order = CachedOrderModel(order_name="订单C")
+        order.add(True)
+        order_id = order.id
+        item = CachedOrderItemModel(item_name="旧商品名", order_id=order_id)
+        item.add(True)
+        call_count = 0
+
+        @cached(
+            ttl=60,
+            orm_model=CachedOrderModel,
+            invalidate_on={
+                CachedOrderModel: lambda current_order: current_order.id,
+                CachedOrderItemModel: lambda current_item: current_item.order_id,
+            },
+        )
+        def get_order_with_items(target_order_id: int):
+            nonlocal call_count
+            call_count += 1
+            return (
+                CachedOrderModel.query.options(
+                    selectinload(CachedOrderModel.items)
+                )
+                .filter_by(id=target_order_id)
+                .first()
+            )
+
+        first_result = get_order_with_items(order_id)
+        assert [current_item.item_name for current_item in first_result.items] == ["旧商品名"]
+        get_order_with_items(order_id)
+        assert call_count == 1, "子对象更新前第二次应命中缓存"
+
+        item_to_update = CachedOrderItemModel.query.filter_by(id=item.id).first()
+        item_to_update.item_name = "新商品名"
+        item_to_update.update(True)
+
+        self.session_scope.remove()
+
+        refreshed_result = get_order_with_items(order_id)
+        assert call_count == 2, "子对象更新后应失效父对象缓存并重新查询"
+        assert [current_item.item_name for current_item in refreshed_result.items] == ["新商品名"]
+
+    def test_cached_parent_is_refreshed_after_manytomany_related_update(self):
+        """多对多关联对象字段更新后应失效父对象缓存"""
+        session = self.session_scope()
+        user = CachedUserModel(username="alice")
+        role = CachedRoleModel(role_name="管理员")
+        session.add_all([user, role])
+        session.flush()
+        user.roles.append(role)
+        session.commit()
+        user_id = user.id
+        role_id = role.id
+        call_count = 0
+
+        @cached(
+            ttl=60,
+            orm_model=CachedUserModel,
+            invalidate_on={
+                CachedUserModel: lambda current_user: current_user.id,
+                CachedRoleModel: lambda current_role: [u.id for u in current_role.users],
+            },
+        )
+        def get_user_with_roles(target_user_id: int):
+            nonlocal call_count
+            call_count += 1
+            return (
+                CachedUserModel.query.options(
+                    selectinload(CachedUserModel.roles)
+                )
+                .filter_by(id=target_user_id)
+                .first()
+            )
+
+        first_result = get_user_with_roles(user_id)
+        assert [current_role.role_name for current_role in first_result.roles] == ["管理员"]
+        get_user_with_roles(user_id)
+        assert call_count == 1, "关联对象更新前第二次应命中缓存"
+
+        role_to_update = CachedRoleModel.query.filter_by(id=role_id).first()
+        role_to_update.role_name = "超级管理员"
+        role_to_update.update(True)
+
+        self.session_scope.remove()
+
+        refreshed_result = get_user_with_roles(user_id)
+        assert call_count == 2, "关联对象更新后应失效父对象缓存并重新查询"
+        assert [current_role.role_name for current_role in refreshed_result.roles] == ["超级管理员"]
 
 
 class TestWatchRelationships:

@@ -350,7 +350,13 @@ class CacheInvalidator:
         with self._lock:
             empty_keys = []
             for dep_key, entries in self._dep_index.items():
-                entries.discard(cache_key)
+                stale_entries = {
+                    entry for entry in entries
+                    if isinstance(entry, tuple)
+                    and len(entry) == 2
+                    and entry[1] == cache_key
+                }
+                entries.difference_update(stale_entries)
                 if not entries:
                     empty_keys.append(dep_key)
             for dk in empty_keys:

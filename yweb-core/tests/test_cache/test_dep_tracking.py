@@ -201,3 +201,24 @@ class TestDependencyTracking:
         list_b()
         assert calls_a == 2
         assert calls_b == 2
+
+    def test_remove_dep_entries_cleans_matching_reverse_index(self):
+        """删除缓存条目时应同步清理对应的反向索引"""
+        shared_order = OrderEntity(id=7, user_id=1, amount=700)
+
+        @cached(ttl=60)
+        def list_orders():
+            return [shared_order]
+
+        self.invalidator.register(OrderEntity, list_orders)
+
+        cache_key = list_orders._build_key((), {})
+        self.invalidator.track_dependencies(list_orders, cache_key, [shared_order])
+
+        dep_key = (OrderEntity, shared_order.id)
+        assert dep_key in self.invalidator._dep_index
+        assert self.invalidator._dep_index[dep_key] == {(id(list_orders), cache_key)}
+
+        self.invalidator.remove_dep_entries(cache_key)
+
+        assert dep_key not in self.invalidator._dep_index
