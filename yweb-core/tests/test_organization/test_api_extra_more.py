@@ -7,6 +7,7 @@ from sqlalchemy.orm import scoped_session, sessionmaker
 
 from yweb.orm import BaseModel, CoreModel, Page
 from yweb.organization.api import create_org_router
+from yweb.organization.api.organization_api import create_organization_crud_router
 from yweb.organization.api.department_api import create_department_crud_router
 from yweb.organization.api.employee_api import create_employee_crud_router
 
@@ -222,3 +223,185 @@ class TestOrganizationApiExtraMore:
         assert client.post("/emp/set-primary-dept?employee_id=1&dept_id=1").status_code == 400
         assert client.post("/emp/update-org-status?employee_id=1&org_id=1&status=3").status_code == 400
         assert client.post("/emp/update-account-status?employee_id=1&account_status=1").status_code == 400
+
+
+class TestOrganizationApiFieldRoundtrip:
+    """测试新增请求字段的创建与更新回传"""
+
+    @pytest.fixture(autouse=True)
+    def setup_db(self, memory_engine):
+        """初始化数据库会话"""
+        BaseModel.metadata.create_all(bind=memory_engine)
+        session_local = sessionmaker(autocommit=False, autoflush=False, bind=memory_engine)
+        session_scope = scoped_session(session_local)
+        CoreModel.query = session_scope.query_property()
+        yield
+        session_scope.remove()
+
+    @pytest.fixture
+    def org_service(self):
+        """创建测试用组织服务"""
+        return SampleOrgService()
+
+    @pytest.fixture
+    def org_client(self, org_service):
+        """组织 API 测试客户端"""
+        app = FastAPI()
+        router = create_organization_crud_router(
+            org_model=SampleOrganization,
+            org_service=org_service,
+        )
+        app.include_router(router, prefix="/org")
+        return TestClient(app)
+
+    @pytest.fixture
+    def dept_client(self, org_service):
+        """部门 API 测试客户端"""
+        app = FastAPI()
+        app.include_router(
+            create_organization_crud_router(
+                org_model=SampleOrganization,
+                org_service=org_service,
+            ),
+            prefix="/org",
+        )
+        app.include_router(
+            create_department_crud_router(
+                dept_model=SampleDepartment,
+                org_model=SampleOrganization,
+                employee_model=SampleEmployee,
+                emp_org_rel_model=SampleEmployeeOrgRel,
+                emp_dept_rel_model=SampleEmployeeDeptRel,
+                dept_leader_model=SampleDeptLeader,
+                org_service=org_service,
+            ),
+            prefix="/dept",
+        )
+        return TestClient(app)
+
+    @pytest.fixture
+    def emp_client(self, org_service):
+        """员工 API 测试客户端"""
+        app = FastAPI()
+        app.include_router(
+            create_employee_crud_router(
+                employee_model=SampleEmployee,
+                org_model=SampleOrganization,
+                dept_model=SampleDepartment,
+                emp_org_rel_model=SampleEmployeeOrgRel,
+                emp_dept_rel_model=SampleEmployeeDeptRel,
+                dept_leader_model=SampleDeptLeader,
+                org_service=org_service,
+            ),
+            prefix="/emp",
+        )
+        return TestClient(app)
+
+    def test_organization_create_and_update_accept_new_fields(self, org_client):
+        """测试组织创建和更新支持新增字段"""
+        create_resp = org_client.post("/org/create", json={
+            "name": "外部组织",
+            "code": "ORG_EXT_001",
+            "external_source": "feishu",
+            "external_corp_id": "corp-001",
+            "external_config": '{"tenant_key":"tk-001"}',
+            "is_active": False,
+        })
+
+        assert create_resp.status_code == 200
+        create_data = create_resp.json()["data"]
+        assert create_data["external_source"] == "feishu"
+        assert create_data["external_corp_id"] == "corp-001"
+        assert create_data["external_config"] == '{"tenant_key":"tk-001"}'
+        assert create_data["is_active"] is False
+
+        org_id = create_data["id"]
+        update_resp = org_client.post(f"/org/update?org_id={org_id}", json={
+            "external_source": "dingtalk",
+            "external_corp_id": "corp-002",
+            "external_config": '{"corp_id":"ding-002"}',
+            "is_active": True,
+        })
+
+        assert update_resp.status_code == 200
+        update_data = update_resp.json()["data"]
+        assert update_data["external_source"] == "dingtalk"
+        assert update_data["external_corp_id"] == "corp-002"
+        assert update_data["external_config"] == '{"corp_id":"ding-002"}'
+        assert update_data["is_active"] is True
+
+    def test_department_create_update_and_tree_return_new_fields(self, dept_client):
+        """测试部门创建更新及树接口返回新增字段"""
+        org_resp = dept_client.post("/org/create", json={
+            "name": "部门字段组织",
+            "code": "DEPT_FIELD_ORG",
+        })
+        org_id = org_resp.json()["data"]["id"]
+
+        create_resp = dept_client.post("/dept/create", json={
+            "org_id": org_id,
+            "name": "技术平台部",
+            "caption": "平台能力建设部门",
+            "external_dept_id": "ext-dept-1",
+            "external_parent_id": "ext-parent-root",
+            "is_active": False,
+        })
+
+        assert create_resp.status_code == 200
+        create_data = create_resp.json()["data"]
+        assert create_data["caption"] == "平台能力建设部门"
+        assert create_data["external_dept_id"] == "ext-dept-1"
+        assert create_data["external_parent_id"] == "ext-parent-root"
+        assert create_data["is_active"] is False
+
+        dept_id = create_data["id"]
+        update_resp = dept_client.post(f"/dept/update?dept_id={dept_id}", json={
+            "caption": "更新后的部门介绍",
+            "external_dept_id": "ext-dept-2",
+            "external_parent_id": "ext-parent-2",
+            "is_active": True,
+        })
+
+        assert update_resp.status_code == 200
+        update_data = update_resp.json()["data"]
+        assert update_data["caption"] == "更新后的部门介绍"
+        assert update_data["external_dept_id"] == "ext-dept-2"
+        assert update_data["external_parent_id"] == "ext-parent-2"
+        assert update_data["is_active"] is True
+
+        tree_resp = dept_client.get(f"/dept/tree?org_id={org_id}")
+        assert tree_resp.status_code == 200
+        tree_nodes = tree_resp.json()["data"]
+        assert tree_nodes[0]["caption"] == "更新后的部门介绍"
+        assert tree_nodes[0]["external_dept_id"] == "ext-dept-2"
+        assert tree_nodes[0]["external_parent_id"] == "ext-parent-2"
+        assert tree_nodes[0]["is_active"] is True
+
+    def test_employee_create_and_update_accept_new_fields(self, emp_client):
+        """测试员工创建和更新支持新增字段"""
+        create_resp = emp_client.post("/emp/create", json={
+            "name": "王五",
+            "code": "EMP-001",
+            "mobile": "13800138111",
+            "note": "来自测试请求",
+            "caption": "核心骨干员工",
+        })
+
+        assert create_resp.status_code == 200
+        create_data = create_resp.json()["data"]
+        assert create_data["code"] == "EMP-001"
+        assert create_data["note"] == "来自测试请求"
+        assert create_data["caption"] == "核心骨干员工"
+
+        emp_id = create_data["id"]
+        update_resp = emp_client.post(f"/emp/update?employee_id={emp_id}", json={
+            "code": "EMP-002",
+            "note": "更新后的备注",
+            "caption": "更新后的介绍",
+        })
+
+        assert update_resp.status_code == 200
+        update_data = update_resp.json()["data"]
+        assert update_data["code"] == "EMP-002"
+        assert update_data["note"] == "更新后的备注"
+        assert update_data["caption"] == "更新后的介绍"

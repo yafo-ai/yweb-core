@@ -115,6 +115,8 @@ def create_organization_crud_router(
                 caption=data.caption,
                 external_source=data.external_source,
                 external_corp_id=data.external_corp_id,
+                external_config=data.external_config,
+                is_active=data.is_active,
             )
             return Resp.OK(data=OrganizationResponse.from_entity(org), message="创建成功")
         except ValueError as e:

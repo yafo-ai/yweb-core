@@ -436,6 +436,9 @@ org_service.add_dept_leader(
 | id | PK | 主键 |
 | name | String | 组织名称 |
 | code | String | 组织编码 |
+| note | String | 备注 |
+| caption | String | 介绍 |
+| is_active | Boolean | 是否启用 |
 | external_source | String | 外部来源（none/wechat_work/feishu/dingtalk） |
 | external_corp_id | String | 外部企业ID |
 | external_config | Text(JSON) | 外部系统配置 |
@@ -448,11 +451,16 @@ org_service.add_dept_leader(
 | org_id | FK | 所属组织ID |
 | parent_id | FK | 父部门ID（自关联） |
 | name | String | 部门名称 |
+| code | String | 部门编码 |
+| note | String | 备注 |
+| caption | String | 介绍 |
 | path | String | 路径（如 /1/2/3/） |
 | level | Integer | 层级（1=根部门） |
 | sort_order | Integer | 排序序号 |
 | primary_leader_id | FK | 主负责人ID |
 | external_dept_id | String | 外部部门ID |
+| external_parent_id | String | 外部父部门ID |
+| is_active | Boolean | 是否启用 |
 
 #### Employee（员工）
 
@@ -460,11 +468,14 @@ org_service.add_dept_leader(
 |------|------|------|
 | id | PK | 主键 |
 | name | String | 姓名 |
+| code | String | 员工编码 |
 | mobile | String | 手机号 |
 | email | String | 邮箱 |
 | avatar | String | 头像URL |
 | gender | Integer | 性别（0-未知,1-男,2-女） |
 | is_senior | Boolean | 是否高管 |
+| note | String | 备注 |
+| caption | String | 介绍 |
 | primary_org_id | FK | 主组织ID |
 | primary_dept_id | FK | 主部门ID |
 
@@ -503,10 +514,24 @@ org_service.add_dept_leader(
 
 ```python
 # 创建组织
-org = org_service.create_org(name="公司名称", code="CODE001")
+org = org_service.create_org(
+    name="公司名称",
+    code="CODE001",
+    note="总部组织",
+    caption="负责集团整体运营",
+    external_source="feishu",
+    external_corp_id="corp_001",
+    external_config='{"tenant_key":"tenant_xxx"}',
+    is_active=True,
+)
 
 # 更新组织
-org_service.update_org(org_id=1, name="新名称")
+org_service.update_org(
+    org_id=1,
+    name="新名称",
+    external_config='{"tenant_key":"tenant_yyy"}',
+    is_active=False,
+)
 
 # 删除组织（有部门或员工时会报错）
 org_service.delete_org(org_id=1)
@@ -524,13 +549,31 @@ orgs = org_service.list_orgs()
 
 ```python
 # 创建部门
-dept = org_service.create_dept(org_id=1, name="技术部")
+dept = org_service.create_dept(
+    org_id=1,
+    name="技术部",
+    code="TECH",
+    caption="平台研发部门",
+    external_dept_id="dept_1001",
+    external_parent_id="root",
+    is_active=True,
+)
 
 # 创建子部门
-sub_dept = org_service.create_dept(org_id=1, name="研发组", parent_id=dept.id)
+sub_dept = org_service.create_dept(
+    org_id=1,
+    name="研发组",
+    parent_id=dept.id,
+    code="TECH-RD",
+)
 
 # 更新部门
-org_service.update_dept(dept_id=1, name="新名称")
+org_service.update_dept(
+    dept_id=1,
+    name="新名称",
+    caption="更新后的部门介绍",
+    external_parent_id="dept_1001",
+)
 
 # 移动部门（更换父部门）
 org_service.move_dept(dept_id=2, new_parent_id=3)
@@ -551,12 +594,20 @@ roots = org_service.get_root_depts(org_id=1)
 # 创建员工
 emp = org_service.create_employee(
     name="张三",
+    code="EMP001",
     mobile="13800138000",
-    email="zhangsan@example.com"
+    email="zhangsan@example.com",
+    note="校招生",
+    caption="后端研发工程师",
 )
 
 # 更新员工
-org_service.update_employee(employee_id=1, name="李四")
+org_service.update_employee(
+    employee_id=1,
+    name="李四",
+    code="EMP002",
+    caption="架构师",
+)
 
 # 删除员工（同时清理所有关联）
 org_service.delete_employee(employee_id=1)
@@ -1079,15 +1130,65 @@ app.include_router(router, prefix="/api/v1")
 
 ```json
 {
-    "code": 200,
+    "status": "success",
     "data": {
-        "items": [...],
-        "total": 100,
+        "rows": [...],
+        "total_records": 100,
         "page": 1,
-        "page_size": 20
+        "page_size": 20,
+        "total_pages": 5,
+        "has_prev": false,
+        "has_next": true
     }
 }
 ```
+
+### 常用请求字段
+
+以下为组织模块内置 CRUD API 常用的请求体字段。
+
+#### 组织 `POST /create` / `POST /update`
+
+| 字段 | create | update | 说明 |
+|------|--------|--------|------|
+| `name` | 必填 | 可选 | 组织名称 |
+| `code` | 必填 | 可选 | 组织编码 |
+| `note` | 可选 | 可选 | 备注 |
+| `caption` | 可选 | 可选 | 介绍 |
+| `external_source` | 可选 | 可选 | 外部系统来源 |
+| `external_corp_id` | 可选 | 可选 | 外部企业ID |
+| `external_config` | 可选 | 可选 | 外部系统配置(JSON字符串) |
+| `is_active` | 可选 | 可选 | 是否启用 |
+
+#### 部门 `POST /dept/create` / `POST /dept/update`
+
+| 字段 | create | update | 说明 |
+|------|--------|--------|------|
+| `org_id` | 必填 | - | 所属组织ID |
+| `name` | 必填 | 可选 | 部门名称 |
+| `code` | 可选 | 可选 | 部门编码 |
+| `parent_id` | 可选 | 通过 `/move` 单独处理 | 父部门ID |
+| `sort_order` | 可选 | 可选 | 排序序号 |
+| `note` | 可选 | 可选 | 备注 |
+| `caption` | 可选 | 可选 | 介绍 |
+| `primary_leader_id` | - | 可选 | 主负责人ID |
+| `external_dept_id` | 可选 | 可选 | 外部部门ID |
+| `external_parent_id` | 可选 | 可选 | 外部父部门ID |
+| `is_active` | 可选 | 可选 | 是否启用 |
+
+#### 员工 `POST /employee/create` / `POST /employee/update`
+
+| 字段 | create | update | 说明 |
+|------|--------|--------|------|
+| `name` | 必填 | 可选 | 员工姓名 |
+| `code` | 可选 | 可选 | 员工编码 |
+| `mobile` | 可选 | 可选 | 手机号 |
+| `email` | 可选 | 可选 | 邮箱 |
+| `gender` | 可选 | 可选 | 性别 |
+| `avatar` | 可选 | 可选 | 头像URL |
+| `is_senior` | 可选 | 可选 | 是否高管 |
+| `note` | 可选 | 可选 | 备注 |
+| `caption` | 可选 | 可选 | 介绍 |
 
 ### 方式2：按需挂载独立路由
 
@@ -1438,16 +1539,31 @@ def startup():
 class CreateOrgRequest(PydanticModel):
     name: str
     code: str
+    note: Optional[str] = None
+    caption: Optional[str] = None
+    external_source: Optional[str] = None
+    external_corp_id: Optional[str] = None
+    external_config: Optional[str] = None
+    is_active: bool = True
 
 class CreateDeptRequest(PydanticModel):
     org_id: int
     name: str
+    code: Optional[str] = None
     parent_id: Optional[int] = None
+    note: Optional[str] = None
+    caption: Optional[str] = None
+    external_dept_id: Optional[str] = None
+    external_parent_id: Optional[str] = None
+    is_active: bool = True
 
 class CreateEmployeeRequest(PydanticModel):
     name: str
+    code: Optional[str] = None
     mobile: Optional[str] = None
     email: Optional[str] = None
+    note: Optional[str] = None
+    caption: Optional[str] = None
 
 # 服务依赖
 def get_org_service():
@@ -1456,7 +1572,16 @@ def get_org_service():
 # 组织 API
 @app.post("/orgs")
 def create_org(req: CreateOrgRequest, svc: OrganizationService = Depends(get_org_service)):
-    org = svc.create_org(name=req.name, code=req.code)
+    org = svc.create_org(
+        name=req.name,
+        code=req.code,
+        note=req.note,
+        caption=req.caption,
+        external_source=req.external_source,
+        external_corp_id=req.external_corp_id,
+        external_config=req.external_config,
+        is_active=req.is_active,
+    )
     return OK(org.to_dict(), "创建成功")
 
 @app.get("/orgs/{org_id}")
@@ -1478,7 +1603,13 @@ def create_dept(req: CreateDeptRequest, svc: OrganizationService = Depends(get_o
         dept = svc.create_dept(
             org_id=req.org_id,
             name=req.name,
-            parent_id=req.parent_id
+            code=req.code,
+            parent_id=req.parent_id,
+            note=req.note,
+            caption=req.caption,
+            external_dept_id=req.external_dept_id,
+            external_parent_id=req.external_parent_id,
+            is_active=req.is_active,
         )
         return OK(dept.to_dict(), "创建成功")
     except ValueError as e:
@@ -1497,8 +1628,11 @@ def delete_dept(dept_id: int, svc: OrganizationService = Depends(get_org_service
 def create_employee(req: CreateEmployeeRequest, svc: OrganizationService = Depends(get_org_service)):
     emp = svc.create_employee(
         name=req.name,
+        code=req.code,
         mobile=req.mobile,
-        email=req.email
+        email=req.email,
+        note=req.note,
+        caption=req.caption,
     )
     return OK(emp.to_dict(), "创建成功")
 

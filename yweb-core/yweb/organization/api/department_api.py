@@ -234,6 +234,10 @@ def create_department_crud_router(
                 parent_id=data.parent_id,
                 sort_order=data.sort_order,
                 note=data.note,
+                caption=data.caption,
+                external_dept_id=data.external_dept_id,
+                external_parent_id=data.external_parent_id,
+                is_active=data.is_active,
             )
             return Resp.OK(data=DepartmentResponse.from_entity(dept), message="创建成功")
         except ValueError as e:

@@ -21,6 +21,10 @@ class DepartmentCreate(BaseModel):
     parent_id: Optional[int] = Field(None, description="父部门ID")
     sort_order: int = Field(0, ge=0, description="排序序号")
     note: Optional[str] = Field(None, description="备注")
+    caption: Optional[str] = Field(None, max_length=512, description="介绍")
+    external_dept_id: Optional[str] = Field(None, max_length=255, description="外部部门ID")
+    external_parent_id: Optional[str] = Field(None, max_length=255, description="外部父部门ID")
+    is_active: bool = Field(True, description="是否启用")
     
     class Config:
         json_schema_extra = {
@@ -39,7 +43,11 @@ class DepartmentUpdate(BaseModel):
     code: Optional[str] = Field(None, max_length=50, description="部门编码")
     sort_order: Optional[int] = Field(None, ge=0, description="排序序号")
     note: Optional[str] = Field(None, description="备注")
+    caption: Optional[str] = Field(None, max_length=512, description="介绍")
     primary_leader_id: Optional[int] = Field(None, description="主负责人ID")
+    external_dept_id: Optional[str] = Field(None, max_length=255, description="外部部门ID")
+    external_parent_id: Optional[str] = Field(None, max_length=255, description="外部父部门ID")
+    is_active: Optional[bool] = Field(None, description="是否启用")
 
 
 class DepartmentResponse(DTO):
@@ -52,12 +60,15 @@ class DepartmentResponse(DTO):
     org_id: int = Field(..., description="所属组织ID")
     name: str = Field(..., description="部门名称")
     code: Optional[str] = Field(None, description="部门编码")
+    caption: Optional[str] = Field(None, description="介绍")
     parent_id: Optional[int] = Field(None, description="父部门ID")
     path: Optional[str] = Field(None, description="部门路径")
     level: int = Field(1, description="部门层级")
     sort_order: int = Field(0, description="排序序号")
     primary_leader_id: Optional[int] = Field(None, description="主负责人ID")
     note: Optional[str] = Field(None, description="备注")
+    external_dept_id: Optional[str] = Field(None, description="外部部门ID")
+    external_parent_id: Optional[str] = Field(None, description="外部父部门ID")
     is_active: bool = Field(True, description="是否启用")
     created_at: Optional[str] = Field(None, description="创建时间")
     updated_at: Optional[str] = Field(None, description="更新时间")
@@ -75,9 +86,13 @@ class DepartmentTreeNode(DTO):
     org_id: int = Field(..., description="所属组织ID")
     name: str = Field(..., description="部门名称")
     code: Optional[str] = Field(None, description="部门编码")
+    caption: Optional[str] = Field(None, description="介绍")
     parent_id: Optional[int] = Field(None, description="父部门ID")
     level: int = Field(1, description="部门层级")
     sort_order: int = Field(0, description="排序序号")
+    external_dept_id: Optional[str] = Field(None, description="外部部门ID")
+    external_parent_id: Optional[str] = Field(None, description="外部父部门ID")
+    is_active: bool = Field(True, description="是否启用")
     
     # 树形特有字段
     children: List["DepartmentTreeNode"] = Field(default_factory=list, description="子部门")

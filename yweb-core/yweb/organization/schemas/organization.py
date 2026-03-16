@@ -20,6 +20,8 @@ class OrganizationCreate(BaseModel):
     caption: Optional[str] = Field(None, description="介绍")
     external_source: Optional[str] = Field(None, max_length=50, description="外部系统来源")
     external_corp_id: Optional[str] = Field(None, max_length=255, description="外部企业ID")
+    external_config: Optional[str] = Field(None, description="外部系统配置(JSON)")
+    is_active: bool = Field(True, description="是否启用")
     
     class Config:
         json_schema_extra = {
@@ -37,6 +39,10 @@ class OrganizationUpdate(BaseModel):
     code: Optional[str] = Field(None, min_length=1, max_length=50, description="组织编码")
     note: Optional[str] = Field(None, description="备注")
     caption: Optional[str] = Field(None, description="介绍")
+    external_source: Optional[str] = Field(None, max_length=50, description="外部系统来源")
+    external_corp_id: Optional[str] = Field(None, max_length=255, description="外部企业ID")
+    external_config: Optional[str] = Field(None, description="外部系统配置(JSON)")
+    is_active: Optional[bool] = Field(None, description="是否启用")
 
 
 class OrganizationResponse(DTO):
@@ -52,6 +58,7 @@ class OrganizationResponse(DTO):
     caption: Optional[str] = Field(None, description="介绍")
     external_source: Optional[str] = Field(None, description="外部系统来源")
     external_corp_id: Optional[str] = Field(None, description="外部企业ID")
+    external_config: Optional[str] = Field(None, description="外部系统配置(JSON)")
     is_active: bool = Field(True, description="是否启用")
     created_at: Optional[str] = Field(None, description="创建时间")
     updated_at: Optional[str] = Field(None, description="更新时间")

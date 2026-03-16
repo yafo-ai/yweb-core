@@ -274,11 +274,14 @@ def create_employee_crud_router(
         try:
             emp = org_service.create_employee(
                 name=data.name,
+                code=data.code,
                 mobile=data.mobile,
                 email=data.email,
                 gender=data.gender,
                 avatar=data.avatar,
                 is_senior=data.is_senior,
+                note=data.note,
+                caption=data.caption,
             )
             return Resp.OK(data=EmployeeResponse.from_entity(emp), message="创建成功")
         except ValueError as e:
