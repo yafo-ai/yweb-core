@@ -54,6 +54,43 @@ class User(BaseModel):
         return super().to_dict(exclude=exclude)
 ```
 
+### OwnsOne 值对象序列化
+
+当模型中包含 `OwnsOne` 值对象时，`to_dict()` 默认输出嵌套字典：
+
+```python
+order = Order.get(1)
+order.to_dict()
+# {
+#     "id": 1,
+#     "order_no": "ORD-001",
+#     "shipping_address": {
+#         "street": "世纪大道1号",
+#         "city": "上海",
+#         "province": "上海",
+#         "zip_code": "200120"
+#     },
+#     ...
+# }
+```
+
+使用 `flatten_owned=True` 切换为平铺输出（适用于旧接口兼容、CSV 导出等）：
+
+```python
+order.to_dict(flatten_owned=True)
+# {
+#     "id": 1,
+#     "order_no": "ORD-001",
+#     "shipping_street": "世纪大道1号",
+#     "shipping_city": "上海",
+#     ...
+# }
+```
+
+值对象为空时，嵌套模式输出 `null`；排除值对象使用 `exclude={"shipping_address"}`。
+
+> 完整文档参见 [21_OwnsOne 值对象嵌入](21_owns_one.md)。
+
 ## to_dict_with_relations() 方法
 
 ### 基本用法

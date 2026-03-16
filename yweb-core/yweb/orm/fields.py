@@ -43,7 +43,7 @@ from enum import Enum
 from typing import Optional, Type, Union, TYPE_CHECKING, Generic, TypeVar, get_type_hints, get_origin, get_args
 
 from sqlalchemy import Table, Column, Integer, BigInteger, String, ForeignKey
-from sqlalchemy.orm import relationship, backref as sa_backref, Mapped, mapped_column
+from sqlalchemy.orm import relationship, backref as sa_backref, Mapped, mapped_column, composite, CompositeProperty
 
 if TYPE_CHECKING:
     from .core_model import CoreModel
@@ -151,6 +151,26 @@ class _ManyToManyConfig:
         self.table_name = table_name
         self.related_name = related_name
         self.kwargs = kwargs
+
+
+class _OwnsOneConfig:
+    """值对象拥有关系配置
+    
+    OwnsOne 表示当前模型拥有一个值对象，值对象的字段展开到当前表中。
+    底层基于 SQLAlchemy composite() 实现。
+    """
+    
+    def __init__(
+        self,
+        owned_type: type,
+        prefix: Optional[str] = None,
+        nullable: bool = True,
+        comment_prefix: Optional[str] = None,
+    ):
+        self.owned_type = owned_type
+        self.prefix = prefix
+        self.nullable = nullable
+        self.comment_prefix = comment_prefix
 
 
 # ==================== 类型标记类（用于 IDE 提示）====================
@@ -434,6 +454,70 @@ def ManyToMany(
     )
 
 
+def OwnsOne(
+    owned_type: type,
+    prefix: Optional[str] = None,
+    nullable: bool = True,
+    comment_prefix: Optional[str] = None,
+) -> _OwnsOneConfig:
+    """值对象拥有关系字段
+    
+    将值对象的字段展开到当前表中，使用 composite() 提供对象化访问。
+    
+    存储示意图：
+    
+        ┌──────────────────────────────────┐
+        │        orders 表                 │
+        │──────────────────────────────────│
+        │ id (PK)                          │
+        │ name                             │
+        │ shipping_street   ← 展开列       │
+        │ shipping_city     ← 展开列       │
+        │ shipping_province ← 展开列       │
+        │ shipping_zip_code ← 展开列       │
+        └──────────────────────────────────┘
+    
+    Args:
+        owned_type: 值对象类型（OwnedType 子类）
+        prefix: 列名前缀（None 时使用属性名本身）
+        nullable: 值对象整体是否可为空（True 时强制所有展开列为 nullable）
+        comment_prefix: 列注释前缀（如 "收货地址"，拼接为 "收货地址-街道"）
+    
+    使用示例:
+        from yweb.orm.owned_types import OwnedType, owned_field
+        from yweb.orm import fields
+        
+        class Address(OwnedType):
+            street = owned_field(String(200), comment="街道")
+            city = owned_field(String(100), comment="城市")
+        
+        class Order(BaseModel):
+            shipping_address = fields.OwnsOne(Address, prefix="shipping")
+            billing_address = fields.OwnsOne(Address, prefix="billing")
+        
+        # 对象访问
+        order.shipping_address.city              # → "上海"
+        order.shipping_address.city = "北京"      # → 自动追踪变更
+        order.shipping_address = None             # → 全列置 NULL
+        
+        # 查询访问
+        Order.query.filter(Order.shipping_address.city == "上海").all()
+        
+        # 序列化
+        order.to_dict()
+        # → {"shipping_address": {"street": "...", "city": "..."}}
+        
+        order.to_dict(flatten_owned=True)
+        # → {"shipping_street": "...", "shipping_city": "..."}
+    """
+    return _OwnsOneConfig(
+        owned_type=owned_type,
+        prefix=prefix,
+        nullable=nullable,
+        comment_prefix=comment_prefix,
+    )
+
+
 # ==================== 字段处理函数 ====================
 
 # 导入工具函数
@@ -625,6 +709,7 @@ def process_relationship_fields(cls):
     - OneToOne: 创建外键列 + relationship（uselist=False）
     - ManyToOne: 创建外键列 + relationship
     - ManyToMany: 创建中间表 + relationship
+    - OwnsOne: 创建展开列 + composite（值对象嵌入）
     
     扫描范围：类自身 + Mixin / abstract 基类（跳过已有 __tablename__ 的具体模型基类）
     """
@@ -650,6 +735,9 @@ def process_relationship_fields(cls):
                 processed_names.add(attr_name)
             elif isinstance(config, _ManyToManyConfig):
                 _process_many_to_many(cls, attr_name, config, Base)
+                processed_names.add(attr_name)
+            elif isinstance(config, _OwnsOneConfig):
+                _process_owns_one(cls, attr_name, config)
                 processed_names.add(attr_name)
 
 
@@ -808,13 +896,102 @@ def _process_many_to_many(cls, attr_name: str, config: _ManyToManyConfig, Base):
     setattr(cls, attr_name, rel)
 
 
+def _make_owned_comparator(field_to_column: dict):
+    """创建 OwnsOne 查询代理的 comparator_factory
+
+    返回一个 Comparator 子类，支持通过嵌套属性访问列引用：
+        Order.shipping_address.city → Order.shipping_city（列对象）
+
+    Args:
+        field_to_column: 字段名到列属性名的映射，如 {"city": "shipping_city"}
+    """
+    class _OwnedComparator(CompositeProperty.Comparator):
+        _field_mapping = field_to_column
+
+        def __getattr__(self, name):
+            if name in self._field_mapping:
+                return getattr(self.prop.parent.class_, self._field_mapping[name])
+            raise AttributeError(
+                f"'{self.prop.parent.class_.__name__}.{self.prop.key}' "
+                f"has no field '{name}'"
+            )
+
+    return _OwnedComparator
+
+
+def _process_owns_one(cls, attr_name: str, config: _OwnsOneConfig):
+    """处理 OwnsOne 值对象字段
+
+    执行三步操作：
+    1. 遍历 OwnedType.__owned_fields__，为每个字段创建展开列
+    2. 创建 composite() 映射，关联值对象类和展开列
+    3. 注册元数据到 cls.__owned_composites__ 供 to_dict() 使用
+    """
+    from .owned_types import OwnedMeta
+
+    owned_type = config.owned_type
+    prefix = config.prefix or attr_name
+    owned_fields = owned_type.__owned_fields__
+
+    field_to_column = {}
+    col_names = []
+
+    for field_name, field_def in owned_fields.items():
+        col_name = f"{prefix}_{field_name}"
+        field_to_column[field_name] = col_name
+        col_names.append(col_name)
+
+        # OwnsOne(nullable=True) 时，强制所有展开列为 nullable
+        col_nullable = field_def.nullable
+        if config.nullable:
+            col_nullable = True
+
+        comment = field_def.comment
+        if config.comment_prefix and comment:
+            comment = f"{config.comment_prefix}-{comment}"
+
+        col_kwargs = {}
+        if field_def.default is not None:
+            col_kwargs['default'] = field_def.default
+        if field_def.kwargs:
+            col_kwargs.update(field_def.kwargs)
+
+        col = mapped_column(
+            field_def.column_type,
+            nullable=col_nullable,
+            comment=comment,
+            **col_kwargs,
+        )
+        setattr(cls, col_name, col)
+
+    comparator_cls = _make_owned_comparator(field_to_column)
+
+    comp = composite(
+        owned_type,
+        *col_names,
+        comparator_factory=comparator_cls,
+    )
+    setattr(cls, attr_name, comp)
+
+    # 子类独立拷贝一份，避免修改父类的 dict
+    if '__owned_composites__' not in cls.__dict__:
+        cls.__owned_composites__ = dict(getattr(cls, '__owned_composites__', {}))
+
+    cls.__owned_composites__[attr_name] = OwnedMeta(
+        owned_type=owned_type,
+        prefix=prefix,
+        field_to_column=field_to_column,
+    )
+
+
 # ==================== 导出 ====================
 
 __all__ = [
     # 字段类型
     "OneToOne",
-    "ManyToOne", 
+    "ManyToOne",
     "ManyToMany",
+    "OwnsOne",
     # 类型标记（用于 IDE 提示）
     "HasMany",
     "HasOne",
@@ -831,6 +1008,7 @@ __all__ = [
     "_OneToOneConfig",
     "_ManyToOneConfig",
     "_ManyToManyConfig",
+    "_OwnsOneConfig",
     # 常量
     "SOFT_DELETE_CASCADE_KEY",
 ]

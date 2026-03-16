@@ -306,7 +306,22 @@ def register_user(data: dict):
 
 ---
 
-## 6. `OwnsOne` 设计
+## 6. `OwnsOne` 设计 ✅ 已实现
+
+> **状态**：已于 2026-03 完成实现并通过全部测试（33 项专项测试 + 620 项回归测试）。
+>
+> **实际实现文件**：
+> - `yweb/orm/owned_types.py` — OwnedType 基类、owned_field、OwnedMeta
+> - `yweb/orm/fields.py` — OwnsOne()、_process_owns_one()、comparator_factory
+> - `yweb/orm/core_model.py` — to_dict() 嵌套/平铺支持
+> - `yweb/orm/__init__.py` — 公开导出
+> - `tests/test_orm/unit/test_owns_one.py` — 功能测试
+> - `tests/test_orm/unit/test_owns_one_risk_points.py` — 风险点专项测试
+>
+> **与设计的差异**：
+> - 采用 `comparator_factory` 替代了最初构想的 `OwnedColumnProxy`，避免与 SQLAlchemy composite 描述符冲突
+> - 采用 `__init_subclass__` 替代了元类 `OwnedTypeMeta`，更简单安全
+> - `OwnedType.__init__` 使用 `object.__setattr__` 绕过变更追踪，避免构造阶段误触 `changed()`
 
 ## 6.1 设计定位
 
@@ -561,15 +576,17 @@ class Order(BaseModel):
 - `yweb/orm/core_model.py`
 - `yweb/orm/__init__.py`
 
-## 8.2 第二阶段：补 `OwnsOne`
+## 8.2 第二阶段：补 `OwnsOne` ✅ 已完成
 
-建议新增或修改：
+已新增或修改：
 
-- `yweb/orm/fields.py`
-- `yweb/orm/core_model.py`
-- 新增 `yweb/orm/owned_types.py`
-- 新增 `tests/test_orm/unit/test_owns_one.py`
-- 更新 `docs/orm_docs/03_relationships.md`
+- ✅ `yweb/orm/fields.py` — OwnsOne()、_OwnsOneConfig、_process_owns_one()、_make_owned_comparator()
+- ✅ `yweb/orm/core_model.py` — __init_subclass__ 扩展、to_dict() 嵌套/平铺
+- ✅ 新增 `yweb/orm/owned_types.py` — OwnedType、owned_field、OwnedField、OwnedMeta
+- ✅ 新增 `tests/test_orm/unit/test_owns_one.py` — 33 项功能测试
+- ✅ 新增 `tests/test_orm/unit/test_owns_one_risk_points.py` — 31 项风险点专项测试
+- ✅ 更新 `yweb/orm/__init__.py` — 导出 OwnsOne、OwnedType、owned_field、OwnedMeta
+- ✅ 更新 `docs/orm_docs/21_owns_one.md` — 完整用户文档
 
 ## 8.3 第三阶段：根据实际需求扩展
 
@@ -611,13 +628,18 @@ class Order(BaseModel):
 
 ## 10. 风险与注意事项
 
-| 风险点 | 说明 | 建议 |
-|------|------|------|
-| 事件滥用 | 所有操作都发事件会导致语义泛滥 | 只对关键业务事实发事件 |
-| 事务外事件语义不稳 | 无事务时很难严格保证“一定提交后再发” | 文档中明确推荐事务内使用 |
-| `OwnsOne` 过度嵌套 | 会增加序列化、查询、迁移复杂度 | 第一阶段只支持单层 |
-| 值对象变更追踪 | SQLAlchemy 对可变复合对象追踪较敏感 | 优先采用替换式赋值 |
-| 查询表达式复杂 | 嵌套对象查询最终仍要落回平铺列 | 提供列名映射辅助函数 |
+| 风险点 | 说明 | 建议 | 状态 |
+|------|------|------|------|
+| 事件滥用 | 所有操作都发事件会导致语义泛滥 | 只对关键业务事实发事件 | 待实现 |
+| 事务外事件语义不稳 | 无事务时很难严格保证“一定提交后再发” | 文档中明确推荐事务内使用 | 待实现 |
+| `OwnsOne` 过度嵌套 | 会增加序列化、查询、迁移复杂度 | 第一阶段只支持单层 | ✅ 已限制 |
+| 值对象变更追踪 | SQLAlchemy 对可变复合对象追踪较敏感 | 采用 MutableComposite + object.\_\_setattr\_\_ | ✅ 已解决 |
+| 查询表达式复杂 | 嵌套对象查询最终仍要落回平铺列 | 通过 comparator_factory 实现透明代理 | ✅ 已解决 |
+| OwnedColumnProxy 与 composite 冲突 | 自定义描述符与 SQLAlchemy composite 冲突 | 改用 comparator_factory | ✅ 已解决 |
+| OwnedTypeMeta 元类不必要 | 元类可能与 MutableComposite 冲突 | 改用 \_\_init_subclass\_\_ | ✅ 已解决 |
+| \_\_init\_\_ 期间误触 changed() | 构造值对象时不应触发变更追踪 | 构造阶段用 object.\_\_setattr\_\_ 绕过 | ✅ 已解决 |
+| OwnsOne(nullable=True) 展开列覆盖 | 整体可空时个别列的 nullable 应被覆盖 | _process_owns_one() 中强制覆盖 | ✅ 已解决 |
+| \_\_owned_composites\_\_ 继承隔离 | 子类不应共享父类的 dict 引用 | 子类独立拷贝一份 | ✅ 已解决 |
 
 ---
 
