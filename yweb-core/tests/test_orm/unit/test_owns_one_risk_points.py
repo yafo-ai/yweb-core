@@ -236,7 +236,13 @@ class TestInitSubclassFieldCollection:
 # ==================== 风险点 3: __init__ 不误触 changed() ====================
 
 class TestInitNoSpuriousChanged:
-    """验证构造阶段使用 object.__setattr__ 不触发 changed()"""
+    """验证构造阶段使用 object.__setattr__ 不触发 changed()
+
+    核心风险：SQLAlchemy 从数据库加载记录时，通过位置参数调用
+    OwnedType(val1, val2, ...) 重建 composite。如果 __init__ 里
+    误触了 changed()，session 会被标记为 dirty，导致纯读操作
+    触发不必要的 UPDATE。
+    """
 
     def test_create_vo_without_parent_no_error(self):
         """独立创建值对象（无 ORM 父对象）不报错"""
@@ -261,6 +267,114 @@ class TestInitNoSpuriousChanged:
         vo = StrictVO("hello", "world")
         assert vo.name == "hello"
         assert vo.code == "world"
+
+    def test_load_from_db_session_not_dirty(self, memory_engine):
+        """从 DB 加载含 OwnsOne 的记录后，session 不应被标脏
+
+        这是最关键的场景：SQLAlchemy 重建 composite 时走 __init__，
+        如果 __init__ 用 self.attr = val（触发 changed()）而非
+        object.__setattr__，session.dirty 就会非空。
+        """
+        BaseModel.metadata.create_all(bind=memory_engine)
+        SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=memory_engine)
+        ss = scoped_session(SessionLocal)
+        CoreModel.query = ss.query_property()
+        try:
+            obj = NullableOverrideModel(name="脏标记测试", label="L")
+            obj.strict = StrictVO(name="hello", code="C01")
+            obj.add(True)
+            saved_id = obj.id
+
+            ss.remove()
+            CoreModel.query = ss.query_property()
+
+            found = NullableOverrideModel.get(saved_id)
+            assert found is not None
+            assert found.strict.name == "hello"
+
+            session = ss()
+            assert found not in session.dirty, \
+                "从 DB 加载后 session 不应标脏（__init__ 不应触发 changed()）"
+        finally:
+            ss.remove()
+
+    def test_read_composite_field_no_dirty(self, memory_engine):
+        """读取 composite 属性后 session 仍不应 dirty"""
+        BaseModel.metadata.create_all(bind=memory_engine)
+        SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=memory_engine)
+        ss = scoped_session(SessionLocal)
+        CoreModel.query = ss.query_property()
+        try:
+            obj = NullableOverrideModel(name="读不脏", label="L")
+            obj.strict = StrictVO(name="read", code="C02")
+            obj.add(True)
+            saved_id = obj.id
+
+            ss.remove()
+            CoreModel.query = ss.query_property()
+
+            found = NullableOverrideModel.get(saved_id)
+            _ = found.strict.name
+            _ = found.strict.code
+
+            session = ss()
+            assert found not in session.dirty, \
+                "只读访问 composite 字段后 session 不应标脏"
+        finally:
+            ss.remove()
+
+    def test_modify_composite_field_marks_dirty(self, memory_engine):
+        """显式修改 composite 字段后 session 应当标脏"""
+        BaseModel.metadata.create_all(bind=memory_engine)
+        SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=memory_engine)
+        ss = scoped_session(SessionLocal)
+        CoreModel.query = ss.query_property()
+        try:
+            obj = NullableOverrideModel(name="改要脏", label="L")
+            obj.strict = StrictVO(name="old", code="C03")
+            obj.add(True)
+            saved_id = obj.id
+
+            ss.remove()
+            CoreModel.query = ss.query_property()
+
+            found = NullableOverrideModel.get(saved_id)
+            found.strict.name = "new"
+
+            session = ss()
+            assert found in session.dirty, \
+                "显式修改 composite 字段后 session 应当标脏"
+        finally:
+            ss.remove()
+
+    def test_load_no_spurious_update(self, memory_engine):
+        """纯加载 + commit 不应产生 UPDATE（回归保障）"""
+        BaseModel.metadata.create_all(bind=memory_engine)
+        SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=memory_engine)
+        ss = scoped_session(SessionLocal)
+        CoreModel.query = ss.query_property()
+        try:
+            obj = NullableOverrideModel(name="无更新", label="L")
+            obj.strict = StrictVO(name="stable", code="C04")
+            obj.add(True)
+            saved_id = obj.id
+            original_ver = obj.ver
+
+            ss.remove()
+            CoreModel.query = ss.query_property()
+
+            found = NullableOverrideModel.get(saved_id)
+            _ = found.strict.name
+            ss().commit()
+
+            ss.remove()
+            CoreModel.query = ss.query_property()
+
+            reloaded = NullableOverrideModel.get(saved_id)
+            assert reloaded.ver == original_ver, \
+                "纯读 + commit 不应触发 UPDATE（ver 不应变化）"
+        finally:
+            ss.remove()
 
     def test_setattr_after_init_calls_changed(self, memory_engine):
         """__init__ 后修改字段应触发变更追踪并成功持久化"""
