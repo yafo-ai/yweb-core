@@ -68,6 +68,9 @@ s3 = ["boto3>=1.28.0"]
 # Redis Token 存储（用于分布式安全URL）
 redis = ["redis>=4.5.0"]
 
+# 限流支持
+ratelimit = ["slowapi>=0.1.9"]
+
 # 文件验证增强（magic number 检测、图片尺寸验证）
 validation = [
     "python-magic>=0.4.27",
@@ -110,6 +113,7 @@ all = [
     "redis>=4.5.0",
     "python-magic>=0.4.27",
     "pillow>=10.0.0",
+    "slowapi>=0.1.9",
 ]
 
 [project.urls]

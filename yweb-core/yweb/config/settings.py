@@ -204,6 +204,35 @@ class RedisSettings(BaseSettings):
         env_prefix = "YWEB_REDIS_"
 
 
+class RateLimitSettings(BaseSettings):
+    """限流配置
+    
+    使用示例:
+        from yweb.config import RateLimitSettings
+        
+        rl_config = RateLimitSettings(
+            default_limits=["100/minute", "5/second"],
+            storage_uri="redis://localhost:6379/1",
+        )
+    
+    YAML 配置示例:
+        ratelimit:
+          enabled: true
+          default_limits: ["100/minute", "5/second"]
+          storage_uri: ""         # 留空用内存，填 redis URL 用 Redis
+          headers_enabled: true
+          key_prefix: "yweb_rl"
+    """
+    enabled: bool = Field(default=True, description="是否启用限流")
+    default_limits: List[str] = Field(default=["60/minute"], description="全局默认限流规则")
+    storage_uri: str = Field(default="", description="存储后端 URI，空字符串=内存，redis://...=Redis")
+    headers_enabled: bool = Field(default=True, description="响应中包含 X-RateLimit-* headers")
+    key_prefix: str = Field(default="yweb_rl", description="限流计数器 key 前缀")
+    
+    class Config:
+        env_prefix = "YWEB_RL_"
+
+
 class SchedulerSettings(BaseSettings):
     """定时任务配置
     
@@ -461,6 +490,7 @@ class AppSettings(BaseSettings):
         - pagination: PaginationSettings (YWEB_PAGE_)
         - scheduler: SchedulerSettings  (YWEB_SCHEDULER_)
         - storage:   StorageSettings    (YWEB_STORAGE_)
+        - ratelimit: RateLimitSettings  (YWEB_RL_)  [可选]
     
     使用示例:
         from yweb.config import AppSettings, load_yaml_config
@@ -512,4 +542,8 @@ class AppSettings(BaseSettings):
     ip_access: Optional[Dict[str, Any]] = Field(
         default=None,
         description="IP 访问控制配置（可选），详见 IPAccessMiddleware",
+    )
+    ratelimit: Optional[RateLimitSettings] = Field(
+        default=None,
+        description="限流配置（可选），详见 setup_ratelimit",
     )
