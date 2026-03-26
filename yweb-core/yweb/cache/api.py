@@ -29,6 +29,7 @@ from .invalidation import cache_invalidator
 class CacheFunctionInfoResponse(DTO):
     """缓存函数摘要"""
     name: str = ""
+    fqn: str = ""
     module: str = ""
     ttl: int = 0
     backend: str = ""
