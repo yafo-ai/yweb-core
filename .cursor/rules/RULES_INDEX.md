@@ -23,7 +23,7 @@
 - `yweb-auth.mdc`
   - 认证授权、权限管理相关规范。
 - `yweb-infra.mdc`
-  - 基础设施（缓存、异常、日志、配置、存储、定时任务）规范。
+  - 基础设施（缓存、异常、日志、配置、存储、定时任务、限流）规范。
 - `yweb-testing.mdc`
   - 测试编写与组织规范。
 - `yweb-webapi-response.mdc`（新增）

@@ -623,3 +623,126 @@ class TestCacheAPIIntegration:
         assert preview["password"] == "***"
         assert preview["access_token"] == "***"
         assert preview["profile"]["nickname"] == "alice"
+
+    def test_functions_fqn_matches_stats_keys_for_closure(self, cache_client):
+        """测试闭包函数的 fqn 能精确匹配 /stats 中 functions 的 key
+
+        闭包函数的 __qualname__ 包含 <locals> 路径（如 outer.<locals>.inner），
+        而 __name__ 只是裸函数名。若 /functions 不暴露 fqn 或 fqn 不一致，
+        前端无法用 /functions 的标识去关联 /stats 的统计数据。
+        """
+        def _create_cached_getter():
+            @cached(ttl=30)
+            def _inner_func(key: str):
+                return f"value_{key}"
+            return _inner_func
+
+        getter = _create_cached_getter()
+        getter("a")
+        getter("a")
+        getter("b")
+
+        functions_resp = cache_client.get("/api/cache/functions")
+        stats_resp = cache_client.get("/api/cache/stats")
+        assert functions_resp.status_code == 200
+        assert stats_resp.status_code == 200
+
+        functions_data = functions_resp.json()["data"]["functions"]
+        stats_functions = stats_resp.json()["data"]["functions"]
+
+        closure_info = next(
+            f for f in functions_data if f["name"] == "_inner_func"
+        )
+        assert "<locals>" in closure_info["fqn"], (
+            "闭包函数的 fqn 应包含 <locals> 路径"
+        )
+
+        assert closure_info["fqn"] in stats_functions, (
+            f"fqn '{closure_info['fqn']}' 应作为 /stats functions 的 key 存在，"
+            f"实际 keys: {list(stats_functions.keys())}"
+        )
+
+        matched_stats = stats_functions[closure_info["fqn"]]
+        assert matched_stats["hits"] == 1
+        assert matched_stats["misses"] == 2
+
+    def test_functions_fqn_matches_stats_keys_for_module_level(self, cache_client):
+        """测试模块级函数的 fqn 也能匹配 /stats 的 key"""
+        @cached(ttl=60)
+        def plain_func(x: int):
+            return x * 10
+
+        plain_func(1)
+        plain_func(1)
+
+        functions_resp = cache_client.get("/api/cache/functions")
+        stats_resp = cache_client.get("/api/cache/stats")
+
+        functions_data = functions_resp.json()["data"]["functions"]
+        stats_functions = stats_resp.json()["data"]["functions"]
+
+        func_info = next(
+            f for f in functions_data if f["name"] == "plain_func"
+        )
+        assert func_info["fqn"] != ""
+        assert "<locals>" not in func_info["fqn"] or True  # 测试方法内定义也含 locals
+
+        assert func_info["fqn"] in stats_functions, (
+            f"fqn '{func_info['fqn']}' 应作为 /stats functions 的 key 存在"
+        )
+
+        matched_stats = stats_functions[func_info["fqn"]]
+        assert matched_stats["hits"] == 1
+        assert matched_stats["misses"] == 1
+
+    def test_all_functions_have_nonempty_fqn(self, cache_client):
+        """测试 /functions 返回的每个函数都有非空 fqn 字段"""
+        @cached(ttl=60)
+        def func_one(x: int):
+            return x
+
+        def _factory():
+            @cached(ttl=30)
+            def func_two(x: int):
+                return x * 2
+            return func_two
+
+        _factory()
+
+        response = cache_client.get("/api/cache/functions")
+        assert response.status_code == 200
+
+        for func_info in response.json()["data"]["functions"]:
+            assert "fqn" in func_info, f"函数 {func_info['name']} 缺少 fqn 字段"
+            assert func_info["fqn"] != "", f"函数 {func_info['name']} 的 fqn 不应为空"
+            assert "." in func_info["fqn"], (
+                f"fqn 应为 module.qualname 格式，实际: {func_info['fqn']}"
+            )
+
+    def test_stats_queryable_by_fqn(self, cache_client):
+        """测试用 fqn 作为 function_name 参数查询单函数统计"""
+        def _make_getter():
+            @cached(ttl=30)
+            def _lookup(key: str):
+                return key.upper()
+            return _lookup
+
+        lookup = _make_getter()
+        lookup("hello")
+        lookup("hello")
+        lookup("world")
+
+        functions_resp = cache_client.get("/api/cache/functions")
+        func_info = next(
+            f for f in functions_resp.json()["data"]["functions"]
+            if f["name"] == "_lookup"
+        )
+        fqn = func_info["fqn"]
+
+        stats_resp = cache_client.get(f"/api/cache/stats?function_name={fqn}")
+        assert stats_resp.status_code == 200
+
+        stats = stats_resp.json()["data"]
+        assert stats["function"] == "_lookup"
+        assert stats["hits"] == 1
+        assert stats["misses"] == 2

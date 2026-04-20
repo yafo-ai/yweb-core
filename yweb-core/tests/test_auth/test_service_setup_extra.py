@@ -7,6 +7,7 @@ import pytest
 from yweb.auth.service import BaseAuthService
 from yweb.auth.setup import (
     AuthSetup,
+    _build_eager_options,
     _create_auth_dependencies,
     _create_jwt_manager,
     _create_user_getter,
@@ -320,6 +321,37 @@ class TestSetupExtra:
         with pytest.raises(AuthenticationException):
             dep_required(token="refresh")
 
+    def test_create_auth_dependencies_blacklist_check(self):
+        """被撤销的 token 应返回 401 TOKEN_REVOKED"""
+        from unittest.mock import MagicMock, patch
+        from yweb.exceptions import ErrorCode
+
+        class J:
+            @staticmethod
+            def verify_token(token, raise_on_expired=False):
+                return SimpleNamespace(user_id=1, token_type="access")
+
+        def user_getter(uid):
+            return SimpleNamespace(id=uid)
+
+        dep_required, dep_optional = _create_auth_dependencies(J(), user_getter, "/auth/token")
+
+        mock_blacklist = MagicMock()
+        mock_blacklist.is_revoked.return_value = True
+
+        with patch("yweb.auth.token_store.get_token_blacklist", return_value=mock_blacklist):
+            # 必须认证：被撤销 → AuthenticationException(TOKEN_REVOKED)
+            with pytest.raises(AuthenticationException) as exc_info:
+                dep_required(token="revoked_token")
+            assert exc_info.value.code == ErrorCode.TOKEN_REVOKED
+
+            # 可选认证：被撤销 → None
+            assert dep_optional(token="revoked_token") is None
+
+        # 无黑名单时正常通过
+        with patch("yweb.auth.token_store.get_token_blacklist", return_value=None):
+            assert dep_required(token="good").id == 1
+
     def test_authsetup_helpers(self):
         setup = AuthSetup(
             get_current_user=lambda: None,
@@ -344,3 +376,51 @@ class TestSetupExtra:
         )
         svc = setup.create_auth_service()
         assert isinstance(svc, BaseAuthService)
+
+    def test_build_eager_options_auto_detects_m2m(self):
+        """_build_eager_options 应自动检测 ManyToMany 关系"""
+        from unittest.mock import MagicMock, patch, sentinel
+
+        m2m_rel = MagicMock()
+        m2m_rel.secondary = MagicMock()  # 有中间表 → ManyToMany
+        m2m_rel.key = "roles"
+
+        o2m_rel = MagicMock()
+        o2m_rel.secondary = None  # 无中间表 → OneToMany
+        o2m_rel.key = "posts"
+
+        mock_mapper = MagicMock()
+        mock_mapper.relationships = [m2m_rel, o2m_rel]
+
+        mock_model = MagicMock()
+
+        with patch("sqlalchemy.inspect", return_value=mock_mapper), \
+             patch("sqlalchemy.orm.selectinload", return_value=sentinel.option) as mock_sel:
+            options = _build_eager_options(mock_model)
+
+        # 只有 ManyToMany（roles）被加入，OneToMany（posts）被排除
+        assert len(options) == 1
+        assert options[0] is sentinel.option
+        mock_sel.assert_called_once()
+
+    def test_build_eager_options_no_relations(self):
+        """无关系的模型应返回空列表"""
+        from unittest.mock import MagicMock, patch
+
+        mock_mapper = MagicMock()
+        mock_mapper.relationships = []
+        mock_model = MagicMock()
+
+        with patch("sqlalchemy.inspect", return_value=mock_mapper):
+            options = _build_eager_options(mock_model)
+
+        assert options == []
+
+    def test_build_eager_options_inspect_fails(self):
+        """inspect 失败时应返回空列表，不抛异常"""
+        from unittest.mock import patch
+
+        with patch("sqlalchemy.inspect", side_effect=Exception("not a model")):
+            options = _build_eager_options(object)
+
+        assert options == []

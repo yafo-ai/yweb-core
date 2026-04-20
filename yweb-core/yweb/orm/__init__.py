@@ -81,6 +81,7 @@ from .fields import (
     OneToOne,
     ManyToOne,
     ManyToMany,
+    OwnsOne,
     # 类型标记（用于 IDE 提示）
     HasMany,
     HasOne,
@@ -91,6 +92,13 @@ from .fields import (
     PROTECT,
     UNLINK,
     DO_NOTHING,
+)
+
+# 值对象类型（OwnsOne 配套）
+from .owned_types import (
+    OwnedType,
+    owned_field,
+    OwnedMeta,
 )
 
 # 版本历史记录
@@ -255,6 +263,7 @@ __all__ = [
     "OneToOne",
     "ManyToOne",
     "ManyToMany",
+    "OwnsOne",
     # 类型标记（用于 IDE 提示）
     "HasMany",
     "HasOne",
@@ -265,6 +274,10 @@ __all__ = [
     "PROTECT",
     "UNLINK",
     "DO_NOTHING",
+    # 值对象类型（OwnsOne 配套）
+    "OwnedType",
+    "owned_field",
+    "OwnedMeta",
     
     # Version History
     "init_versioning",

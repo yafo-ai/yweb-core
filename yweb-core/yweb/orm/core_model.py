@@ -131,12 +131,17 @@ class CoreModel(IdModel):
         from .fields import (
             process_relationship_fields,
             _OneToOneConfig, _ManyToOneConfig, _ManyToManyConfig,
+            _OwnsOneConfig,
         )
         
         # 检查是否有 fields.* 字段需要处理
         # 除了类自身，还需要扫描 Mixin / abstract 基类
         # （它们的字段不会被自身处理，需要在具体子类中处理）
         # 跳过已有 __tablename__ 的具体模型基类（它们创建时已处理过自己的字段）
+        _config_types = (
+            _OneToOneConfig, _ManyToOneConfig, _ManyToManyConfig,
+            _OwnsOneConfig,
+        )
         has_relationship_fields = False
         for klass in cls.__mro__:
             if klass is object:
@@ -144,7 +149,7 @@ class CoreModel(IdModel):
             if klass is not cls and '__tablename__' in klass.__dict__:
                 continue
             if any(
-                isinstance(v, (_OneToOneConfig, _ManyToOneConfig, _ManyToManyConfig))
+                isinstance(v, _config_types)
                 for v in vars(klass).values()
             ):
                 has_relationship_fields = True
@@ -808,21 +813,54 @@ class CoreModel(IdModel):
     
     # ==================== 序列化方法 ====================
     
-    def to_dict(self, exclude: set = None) -> dict:
+    def to_dict(self, exclude: set = None, flatten_owned: bool = False) -> dict:
         """转换为字典
         
         Args:
             exclude: 需要排除的字段集合
+            flatten_owned: 是否平铺 OwnsOne 值对象字段（默认 False 嵌套输出）
             
         Returns:
             字典格式的对象数据
+            
+        示例:
+            # 默认嵌套输出
+            order.to_dict()
+            # → {"id": 1, "shipping_address": {"street": "...", "city": "..."}}
+            
+            # 平铺输出（兼容旧接口、CSV 导出等）
+            order.to_dict(flatten_owned=True)
+            # → {"id": 1, "shipping_street": "...", "shipping_city": "..."}
         """
         exclude = exclude or set()
-        return {
-            c.key: getattr(self, c.key)
-            for c in inspect(self).mapper.column_attrs
-            if c.key not in exclude
-        }
+        owned_composites = getattr(self.__class__, '__owned_composites__', {})
+
+        # 嵌套模式下，收集所有属于 owned composite 的展开列，跳过它们
+        owned_columns = set()
+        if not flatten_owned and owned_composites:
+            for meta in owned_composites.values():
+                owned_columns.update(meta.field_to_column.values())
+
+        result = {}
+        for c in inspect(self).mapper.column_attrs:
+            if c.key in exclude:
+                continue
+            if c.key in owned_columns:
+                continue
+            result[c.key] = getattr(self, c.key)
+
+        # 嵌套模式下，添加 owned composite 作为嵌套字典
+        if not flatten_owned and owned_composites:
+            for attr_name in owned_composites:
+                if attr_name in exclude:
+                    continue
+                owned_value = getattr(self, attr_name)
+                if owned_value:
+                    result[attr_name] = owned_value.to_dict()
+                else:
+                    result[attr_name] = None
+
+        return result
     
     def to_dict_with_relations(self, relations: list = None, exclude: set = None) -> dict:
         """转换为字典（包含关联对象）

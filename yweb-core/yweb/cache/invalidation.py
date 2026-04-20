@@ -27,45 +27,73 @@ from yweb.log import get_logger
 logger = get_logger("yweb.cache.invalidation")
 
 
+def _extract_entities(result: Any, model_classes: Set[Type]) -> List[tuple]:
+    """从缓存结果中提取 ORM 实体实例
+
+    扫描单对象、列表、分页对象等结构，返回 [(model_class, entity_id), ...] 列表。
+    只提取 model_classes 中注册过的模型类型。
+    """
+    entities = []
+
+    def _check(obj):
+        obj_type = type(obj)
+        for mc in model_classes:
+            if obj_type is mc or (isinstance(obj, type) is False and isinstance(obj, mc)):
+                eid = getattr(obj, "id", None)
+                if eid is not None:
+                    entities.append((mc, eid))
+                return
+
+    if result is None:
+        return entities
+
+    if isinstance(result, (list, tuple, set, frozenset)):
+        for item in result:
+            _check(item)
+    elif hasattr(result, "items") and isinstance(result.items, (list, tuple)):
+        for item in result.items:
+            _check(item)
+    else:
+        _check(result)
+
+    return entities
+
+
 class CacheInvalidator:
     """缓存自动失效管理器
     
     监听 SQLAlchemy 模型事件，自动失效相关缓存。
     
-    支持的事件:
-        - after_update: 模型更新后
-        - after_delete: 模型删除后
-        - after_insert: 模型插入后（可选）
+    支持两种失效策略：
+    
+    1. **key_extractor 精确失效**（默认）：从变更实体提取缓存键参数，
+       调用 ``func.invalidate(key)``。适用于 ``get_user(user_id)`` 等
+       参数就是实体 ID 的场景。
+    
+    2. **依赖追踪失效**（自动启用）：缓存写入时扫描结果中包含的实体，
+       建立反向索引 ``(Model, entity_id) → {cache_keys}``。实体变更时
+       精确失效包含该实体的所有缓存条目。适用于列表查询等参数不是实体 ID
+       的场景，无需额外配置。
     
     使用示例:
-        # 基本用法
+        # 单实体查询 — key_extractor 直接命中
         cache_invalidator.register(User, get_user_by_id)
         
-        # 自定义 key 提取器
-        cache_invalidator.register(
-            User, 
-            get_user_by_username,
-            key_extractor=lambda user: user.username
-        )
-        
-        # 监听特定事件
-        cache_invalidator.register(
-            User, 
-            get_user_by_id,
-            events=("after_update",)  # 只在更新时失效
-        )
-        
-        # 注册多个缓存函数
-        cache_invalidator.register(User, get_user_by_id)
-        cache_invalidator.register(User, get_user_by_username, 
-                                   key_extractor=lambda u: u.username)
+        # 列表查询 — 依赖追踪自动处理
+        cache_invalidator.register(Order, get_orders)
+        # Order 变更时，自动失效所有包含该 Order 的缓存条目
     """
     
     def __init__(self):
         self._registrations: Dict[Type, List[dict]] = {}
-        self._listened_events: Dict[Type, Set[str]] = {}  # model -> 已注册监听的事件名集合
+        self._listened_events: Dict[Type, Set[str]] = {}
+        self._watched_relationships: Set[str] = set()
         self._lock = threading.RLock()
         self._enabled = True
+        # 反向索引: (model_class, entity_id) → set of (cached_func_id, raw_cache_key)
+        self._dep_index: Dict[tuple, Set[tuple]] = {}
+        # func id → CachedFunction 引用
+        self._tracked_funcs: Dict[int, Any] = {}
     
     def register(
         self,
@@ -73,6 +101,7 @@ class CacheInvalidator:
         cached_func: Any,
         key_extractor: Optional[Callable[[Any], Any]] = None,
         events: tuple = ("after_update", "after_delete"),
+        watch_relationships: bool = True,
     ) -> "CacheInvalidator":
         """注册模型与缓存函数的关联
         
@@ -81,6 +110,10 @@ class CacheInvalidator:
             cached_func: 被 @cached 装饰的函数（CachedFunction 实例）
             key_extractor: 从模型实例提取缓存键的函数，默认提取 id
             events: 要监听的事件元组，默认 ("after_update", "after_delete")
+            watch_relationships: 是否监听 ManyToMany 集合变更（append/remove），默认 True。
+                自动检测模型上的 ManyToMany 关系，集合增删时触发缓存失效。
+                例如 user.roles.append(role) 会自动失效该 user 的缓存。
+                模型无 ManyToMany 关系时无额外开销。设为 False 可关闭。
         
         Returns:
             self，支持链式调用
@@ -120,9 +153,14 @@ class CacheInvalidator:
                 self._setup_listeners_for_events(model, new_events)
                 self._listened_events[model].update(new_events)
             
+            # 监听 ManyToMany 集合变更
+            if watch_relationships:
+                self._setup_relationship_listeners(model)
+            
             logger.debug(
                 f"Registered cache invalidation: "
                 f"{model.__name__} -> {cached_func.__name__}"
+                f"{' (watching relationships)' if watch_relationships else ''}"
             )
         
         return self
@@ -154,6 +192,55 @@ class CacheInvalidator:
                     f"Set up {event_name} listener for {model.__name__}"
                 )
     
+    def _setup_relationship_listeners(self, model: Type):
+        """监听模型上所有 ManyToMany 集合的 append/remove 事件
+        
+        当 user.roles.append(role) 或 user.roles.remove(role) 时，
+        自动失效该 user 的缓存。仅监听有 secondary 中间表的关系
+        （即 ManyToMany），不监听 OneToMany。
+        """
+        try:
+            from sqlalchemy import event, inspect as sa_inspect
+        except ImportError:
+            return
+        
+        try:
+            mapper = sa_inspect(model)
+        except Exception:
+            return
+        
+        for rel in mapper.relationships:
+            if rel.secondary is None:
+                continue
+            
+            watch_key = f"{model.__name__}.{rel.key}"
+            if watch_key in self._watched_relationships:
+                continue
+            self._watched_relationships.add(watch_key)
+            
+            rel_attr = getattr(model, rel.key)
+            
+            def _make_collection_handler(rel_key):
+                def handler(target, value, initiator):
+                    if not self._enabled:
+                        return
+                    self._invalidate_for_target(
+                        model, target, "collection_change"
+                    )
+                    logger.debug(
+                        f"Collection change on {model.__name__}.{rel_key}: "
+                        f"invalidated cache for id={getattr(target, 'id', '?')}"
+                    )
+                return handler
+            
+            handler = _make_collection_handler(rel.key)
+            event.listen(rel_attr, "append", handler)
+            event.listen(rel_attr, "remove", handler)
+            
+            logger.debug(
+                f"Watching M2M collection: {watch_key} (append/remove)"
+            )
+    
     def _create_handler(self, model: Type, event_name: str):
         """创建事件处理器"""
         def handler(mapper, connection, target):
@@ -172,45 +259,108 @@ class CacheInvalidator:
     ):
         """为目标对象执行缓存失效
         
-        支持 key_extractor 返回单个值或列表：
-        - 单个值：失效单个缓存
-        - 列表：批量失效多个缓存（用于关联模型场景）
+        双路径失效：
+        1. key_extractor 精确失效（参数即 ID 的场景）
+        2. 反向索引失效（列表查询等依赖追踪场景）
         """
         if not self._enabled:
             return
         
-        if model not in self._registrations:
-            return
+        entity_id = getattr(target, "id", None)
         
-        for reg in self._registrations[model]:
-            # 检查是否监听此事件
-            if event_name not in reg.get("events", ()):
-                continue
-            
-            try:
-                # 提取缓存键（可能是单个值或列表）
-                keys = reg["key_extractor"](target)
-                func = reg["func"]
+        # 路径 1: key_extractor 精确失效
+        if model in self._registrations:
+            for reg in self._registrations[model]:
+                if event_name != "collection_change":
+                    if event_name not in reg.get("events", ()):
+                        continue
                 
-                # 支持返回列表（批量失效）
-                if isinstance(keys, (list, tuple)):
-                    for key in keys:
-                        func.invalidate(key)
-                    logger.debug(
-                        f"Auto-invalidated cache (batch): "
-                        f"{func.__name__}({len(keys)} keys) on {event_name}"
-                    )
-                else:
-                    # 单个值
-                    func.invalidate(keys)
+                try:
+                    keys = reg["key_extractor"](target)
+                    func = reg["func"]
+                    
+                    if isinstance(keys, (list, tuple)):
+                        for key in keys:
+                            func.invalidate(key)
+                    else:
+                        func.invalidate(keys)
                     logger.debug(
                         f"Auto-invalidated cache: "
                         f"{func.__name__}({keys}) on {event_name}"
                     )
-            except Exception as e:
-                logger.warning(
-                    f"Failed to invalidate cache for {model.__name__}: {e}"
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to invalidate cache for {model.__name__}: {e}"
+                    )
+        
+        # 路径 2: 反向索引失效（依赖追踪）
+        if entity_id is not None:
+            self._invalidate_by_dep(model, entity_id)
+    
+    def track_dependencies(
+        self, cached_func: Any, cache_key: str, result: Any
+    ) -> None:
+        """扫描缓存结果，建立 (Model, entity_id) → cache_key 的反向索引
+        
+        由 CachedFunction.__call__ 在缓存写入后调用。
+        """
+        if not self._registrations:
+            return
+        
+        registered_models = set(self._registrations.keys())
+        entities = _extract_entities(result, registered_models)
+        if not entities:
+            return
+        
+        func_id = id(cached_func)
+        self._tracked_funcs[func_id] = cached_func
+        
+        with self._lock:
+            for model_cls, entity_id in entities:
+                dep_key = (model_cls, entity_id)
+                if dep_key not in self._dep_index:
+                    self._dep_index[dep_key] = set()
+                self._dep_index[dep_key].add((func_id, cache_key))
+    
+    def _invalidate_by_dep(self, model: Type, entity_id: Any) -> None:
+        """通过反向索引失效所有包含指定实体的缓存条目"""
+        dep_key = (model, entity_id)
+        
+        with self._lock:
+            entries = self._dep_index.pop(dep_key, None)
+        
+        if not entries:
+            return
+        
+        for func_id, cache_key in entries:
+            func = self._tracked_funcs.get(func_id)
+            if func is None:
+                continue
+            try:
+                func._backend.delete(cache_key)
+                logger.debug(
+                    f"Dep-invalidated: {func.__name__} key={cache_key} "
+                    f"(dep={model.__name__}#{entity_id})"
                 )
+            except Exception as e:
+                logger.warning(f"Dep-invalidation failed: {e}")
+    
+    def remove_dep_entries(self, cache_key: str) -> None:
+        """清理反向索引中指定 cache_key 的条目（缓存条目被淘汰时调用）"""
+        with self._lock:
+            empty_keys = []
+            for dep_key, entries in self._dep_index.items():
+                stale_entries = {
+                    entry for entry in entries
+                    if isinstance(entry, tuple)
+                    and len(entry) == 2
+                    and entry[1] == cache_key
+                }
+                entries.difference_update(stale_entries)
+                if not entries:
+                    empty_keys.append(dep_key)
+            for dk in empty_keys:
+                del self._dep_index[dk]
     
     def unregister(
         self, 
@@ -295,8 +445,9 @@ class CacheInvalidator:
         """清空所有注册"""
         with self._lock:
             self._registrations.clear()
-            # 注意：SQLAlchemy 事件监听器不会被移除
-            # 但由于 _registrations 为空，handler 不会执行任何操作
+            self._watched_relationships.clear()
+            self._dep_index.clear()
+            self._tracked_funcs.clear()
             logger.debug("All cache invalidation registrations cleared")
 
 

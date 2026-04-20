@@ -18,11 +18,14 @@ from ..enums import EmployeeStatus
 class EmployeeCreate(BaseModel):
     """创建员工请求"""
     name: str = Field(..., min_length=1, max_length=100, description="姓名")
+    code: Optional[str] = Field(None, max_length=255, description="员工编码")
     mobile: Optional[str] = Field(None, max_length=20, description="手机号")
     email: Optional[str] = Field(None, max_length=255, description="邮箱")
     gender: int = Field(0, ge=0, le=2, description="性别（0-未知，1-男，2-女）")
     avatar: Optional[str] = Field(None, max_length=500, description="头像URL")
     is_senior: bool = Field(False, description="是否高管")
+    note: Optional[str] = Field(None, description="备注")
+    caption: Optional[str] = Field(None, max_length=512, description="介绍")
     
     class Config:
         json_schema_extra = {
@@ -38,11 +41,14 @@ class EmployeeCreate(BaseModel):
 class EmployeeUpdate(BaseModel):
     """更新员工请求"""
     name: Optional[str] = Field(None, min_length=1, max_length=100, description="姓名")
+    code: Optional[str] = Field(None, max_length=255, description="员工编码")
     mobile: Optional[str] = Field(None, max_length=20, description="手机号")
     email: Optional[str] = Field(None, max_length=255, description="邮箱")
     gender: Optional[int] = Field(None, ge=0, le=2, description="性别")
     avatar: Optional[str] = Field(None, max_length=500, description="头像URL")
     is_senior: Optional[bool] = Field(None, description="是否高管")
+    note: Optional[str] = Field(None, description="备注")
+    caption: Optional[str] = Field(None, max_length=512, description="介绍")
 
 
 class EmployeeResponse(DTO):
@@ -53,11 +59,14 @@ class EmployeeResponse(DTO):
     """
     id: int = Field(..., description="员工ID")
     name: str = Field(..., description="姓名")
+    code: Optional[str] = Field(None, description="员工编码")
     mobile: Optional[str] = Field(None, description="手机号")
     email: Optional[str] = Field(None, description="邮箱")
     gender: int = Field(0, description="性别")
     avatar: Optional[str] = Field(None, description="头像URL")
     is_senior: bool = Field(False, description="是否高管")
+    note: Optional[str] = Field(None, description="备注")
+    caption: Optional[str] = Field(None, description="介绍")
     user_id: Optional[int] = Field(None, description="关联的用户账号ID")
     primary_org_id: Optional[int] = Field(None, description="主组织ID")
     primary_dept_id: Optional[int] = Field(None, description="主部门ID")

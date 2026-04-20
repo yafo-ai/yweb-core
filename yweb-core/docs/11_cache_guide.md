@@ -316,37 +316,112 @@ def get_user_with_dept(user_id: int):
 
 ### 工作原理
 
-自动缓存失效的完整流程：
+自动缓存失效采用**双路径**机制，同时覆盖单实体查询和列表查询：
 
-1. **装饰器解析** `invalidate_on` 参数（单模型/列表/字典）
-2. **自动注册** 调用 `cache_invalidator.register()` 监听模型事件
-3. **事件触发** ORM 模型 `update/delete/insert` 时触发 SQLAlchemy 事件
-4. **Key 提取** 事件处理器通过 `key_extractor` 从模型实例提取缓存键
-5. **缓存失效** 调用 `cached_func.invalidate(key)` 清除对应缓存
+#### 路径 1：key_extractor 精确失效（单实体查询）
+
+适用于 `get_user(user_id)` 等参数就是实体 ID 的场景：
+
+1. ORM 模型变更时触发 SQLAlchemy 事件
+2. `key_extractor` 从实例提取 ID → 调用 `func.invalidate(id)`
+
+#### 路径 2：依赖追踪失效（列表查询）
+
+适用于 `get_orders(user_id, page)` 等参数不是实体 ID 的场景：
+
+1. **缓存写入时**：自动扫描结果中的实体实例，建立反向索引 `(Model, entity_id) → {cache_keys}`
+2. **实体变更时**：查反向索引，精确失效包含该实体的缓存条目
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    自动缓存失效流程                          │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                  自动缓存失效（双路径）                         │
+└──────────────────────────────────────────────────────────────┘
 
-  业务代码                   SQLAlchemy                  缓存
-      │                          │                        │
-      │ user.name = "新名字"     │                        │
-      │ user.update()            │                        │
-      │─────────────────────────►│                        │
-      │                          │                        │
-      │                          │ 触发 after_update      │
-      │                          │────────────────────────►
-      │                          │                        │
-      │                          │    key_extractor(user) │
-      │                          │    → user.id = 123     │
-      │                          │                        │
-      │                          │  get_user.invalidate(123)
-      │                          │                        │
-      │                          │                        │
-      │   下次请求自动从数据库获取  │                        │
-      │◄ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─│                        │
+  路径 1（单实体）:
+      user.update()  → after_update → key_extractor(user) → get_user.invalidate(123)
+
+  路径 2（列表查询）:
+      缓存写入时: get_orders(1, 1) → [Order(1), Order(2)] → 反向索引:
+                  (Order, 1) → {"get_orders:1:1"}
+                  (Order, 2) → {"get_orders:1:1"}
+
+      Order(2) 变更时: 查反向索引 → 精确删除 "get_orders:1:1"
 ```
+
+**两条路径自动生效，用户只需写 `invalidate_on=Model`，无需区分查询类型。**
+
+### 关联数据变更的缓存失效
+
+自动失效默认只覆盖**注册模型本身**的变更和 **ManyToMany 关联增删**。以下两种场景需要通过 `invalidate_on` 字典显式声明：
+
+#### 场景 1：OneToMany 子表变更影响父表缓存
+
+```python
+# 缓存 Order，预加载子表 OrderItem
+@cached(ttl=60, orm_model=Order, invalidate_on=Order)
+def get_order(order_id: int):
+    return Order.query.options(selectinload(Order.items)).filter_by(id=order_id).first()
+```
+
+**问题**：修改某条 OrderItem 后，Order 的缓存**不会失效**，因为：
+
+- `invalidate_on=Order` 只监听 `Order` 模型的 ORM 事件
+- `watch_relationships` 只监听 ManyToMany（有中间表的关系），不监听 OneToMany
+- 依赖追踪只扫描结果顶层对象（`Order` 实例），不递归扫描嵌套关系
+
+**解决：在 `invalidate_on` 中声明子表，并提供 `key_extractor` 映射回父表 ID**
+
+```python
+@cached(ttl=60, orm_model=Order, invalidate_on={
+    Order: lambda o: o.id,
+    OrderItem: lambda item: item.order_id,  # 子表变更 → 用 order_id 失效父表
+})
+def get_order(order_id: int):
+    return Order.query.options(selectinload(Order.items)).filter_by(id=order_id).first()
+```
+
+这样 `OrderItem` 的增删改都会自动提取 `order_id`，调用 `get_order.invalidate(order_id)` 精确失效。
+
+#### 场景 2：ManyToMany 关联实体的属性变更
+
+```python
+@cached(ttl=60, orm_model=User, invalidate_on=User)
+def get_user(user_id: int):
+    return User.query.options(selectinload(User.roles)).filter_by(id=user_id).first()
+
+cache_invalidator.register(User, get_user)  # watch_relationships 默认 True
+```
+
+**已自动覆盖的场景**：
+
+- `user.roles.append(role)` — M2M 集合 append 事件 → 自动失效 ✅
+- `user.roles.remove(role)` — M2M 集合 remove 事件 → 自动失效 ✅
+
+**未覆盖的场景**：
+
+- `role.name = "新名字"; role.update()` — Role 自身属性变更，不会触发 User 缓存失效 ❌
+
+如果需要覆盖 Role 属性变更，同样用 `invalidate_on` 字典声明：
+
+```python
+@cached(ttl=60, orm_model=User, invalidate_on={
+    User: lambda u: u.id,
+    Role: lambda role: [u.id for u in role.users],  # 反查所有关联 User
+})
+def get_user(user_id: int):
+    return User.query.options(selectinload(User.roles)).filter_by(id=user_id).first()
+```
+
+#### 覆盖范围速查表
+
+| 变更类型 | 示例 | 默认是否失效 | 需要额外配置 |
+|---------|------|:-----------:|------------|
+| 实体本身变更 | `order.update()` | ✅ | 无 |
+| M2M 关联增删 | `user.roles.append(role)` | ✅ | 无（`watch_relationships=True`） |
+| OneToMany 子表变更 | `order_item.update()` | ❌ | `invalidate_on={OrderItem: lambda i: i.order_id}` |
+| M2M 关联实体属性变更 | `role.name = "x"` | ❌ | `invalidate_on={Role: lambda r: [u.id for u in r.users]}` |
+
+> **推荐做法**：大多数场景只需要 `invalidate_on=Model`；涉及子表或关联实体属性变更时，使用 `invalidate_on` 字典声明映射关系，这是最精确且零侵入的方案。
 
 ### 手动注册方式（备选）
 
@@ -537,72 +612,39 @@ cache_invalidator.register(
 )
 ```
 
-### 多实体组合缓存的设计考量
+### 列表查询与多实体缓存
 
-当缓存函数涉及多个实体的组合查询时，自动失效面临挑战：
+`invalidate_on` 同时支持单实体查询和列表查询，**无需额外配置**：
 
 ```python
-@cached(ttl=300)
+# 单实体查询 — key_extractor 路径自动命中
+@cached(ttl=60, invalidate_on=Order)
+def get_order(order_id: int):
+    return Order.get(order_id)
+
+# 列表查询 — 依赖追踪路径自动命中
+@cached(ttl=60, invalidate_on=Order)
+def get_orders(user_id: int, page: int):
+    return Order.query.filter_by(user_id=user_id).paginate(page)
+
+# 多模型组合查询
+@cached(ttl=300, invalidate_on=[User, Department])
 def get_user_with_dept(user_id: int):
     user = User.get(user_id)
     dept = Department.get(user.dept_id)
-    return {"user": user, "dept": dept}  # 组合多个实体
+    return {"user": user, "dept": dept}
 ```
 
-**问题**：User 变更能自动失效，但 Department 变更时如何失效？
+**列表查询示例**：`get_orders(1, 1)` 返回 `[Order(1), Order(2), Order(3)]` 时，框架自动建立反向索引。当 `Order(2)` 被更新，只有包含 `Order(2)` 的缓存条目被精确失效，其他用户的列表缓存不受影响。
 
-#### 当前方案：依赖声明式（invalidate_on）
+#### 支持的结果类型
 
-```python
-@cached(ttl=300, invalidate_on={
-    User: lambda user: user.id,
-    Department: lambda dept: [e.user_id for e in dept.employees]  # 返回列表批量失效
-})
-def get_user_with_dept(user_id: int):
-    ...
-```
-
-**优点**：
-- ✅ 使用极简：声明依赖模型即可
-- ✅ 无需关心标签命名
-- ✅ 实现较简单：复用现有 `cache_invalidator`
-
-**缺点**：
-- ❌ **Key 提取难题**：Department 变更时，需要自定义 `key_extractor` 从关联关系提取所有相关的 `user_id`
-- ❌ **可能过度失效**：如果无法精准提取 key，只能 `clear()` 整个缓存
-- ❌ **复杂关系难以处理**：多层嵌套关系难以自动推断
-
-#### 备选方案：标签式缓存失效（Tag-based）
-
-业界常用方案（Django Cache、Spring Cache、Redis 都支持），提供更精准的失效控制：
-
-```python
-# 概念示例（yweb 暂未实现）
-@cached(ttl=300, tags=lambda user_id: [f"user:{user_id}", f"dept:{get_dept_id(user_id)}"])
-def get_user_with_dept(user_id: int):
-    ...
-
-# Department 变更时按标签失效
-cache_invalidator.invalidate_by_tag(f"dept:{dept.id}")  # 精准失效
-```
-
-**优点**：
-- ✅ **失效精准**：只失效真正关联的缓存
-- ✅ **灵活**：标签可以跨模型、跨业务任意组合
-- ✅ **业界成熟**：Django Cache、Spring Cache、Redis 都支持
-
-**缺点**：
-- ❌ 标签需要**运行时动态生成**，可能需要额外查询（如 `get_dept_id(user_id)`）
-- ❌ 标签命名需要规范，否则容易混乱
-- ❌ 实现复杂：需要维护 `tag → [cache_keys]` 的反向映射
-
-#### 实践建议
-
-| 场景 | 推荐方案 |
-|------|---------|
-| 单模型缓存 | `invalidate_on=Model`（简单够用） |
-| 多模型组合、关系简单 | `invalidate_on={Model: key_extractor}` |
-| 复杂关联、需要精准控制 | 手动调用 `invalidate()` / `refresh()` |
+| 结果类型 | 示例 | 扫描行为 |
+|---------|------|---------|
+| 单对象 | `Order(id=1)` | 直接提取 |
+| 列表/元组 | `[Order(1), Order(2)]` | 遍历每个元素 |
+| 分页对象 | `Page(items=[...])` | 遍历 `items` 属性 |
+| 非实体类型 | `dict`, `str`, `int` | 跳过（不追踪） |
 
 ---
 
@@ -970,7 +1012,7 @@ app.include_router(
 
 ### 实现方案（推荐：setup_auth 一站式）
 
-> **推荐使用 `setup_auth()`**：`setup_auth()` 已内置用户缓存 + 自动失效，无需手动配置。详见 [认证指南 - 一站式认证设置](06_auth_guide.md#一站式认证设置-setup_auth推荐)。
+> **推荐使用 `setup_auth()`**：自动完成 缓存 + 自动失效 + 黑名单检查 + Session 安全。详见 [认证指南 - 一站式认证设置](06_auth_guide.md#一站式认证设置-setup_auth推荐)。
 
 ```python
 # app/api/dependencies.py — 推荐方式
@@ -985,6 +1027,17 @@ auth = setup_auth(User, cache_ttl=60)  # 自动完成缓存 + 失效注册
 # 缓存统计: auth.get_user_cache_stats()
 ```
 
+**`setup_auth` 自动处理的缓存问题：**
+
+| 问题 | 自动解决方案 |
+|------|------------|
+| 频繁查库 | `@cached` 缓存用户对象，默认 60s TTL |
+| 缓存脏数据（模型本身） | `cache_invalidator` 监听 User 的 ORM 事件自动失效 |
+| 缓存脏数据（M2M 关系） | `cache_invalidator` 默认监听 ManyToMany 集合变更（如 `user.roles.append(role)`）自动失效 |
+| 缓存对象 Session 脱离 | `@cached(orm_model=User)` 缓存命中时自动 `session.merge(load=False)` |
+| 角色等关系加载 | 首次查询自动 `selectinload` 所有 ManyToMany 关系，缓存对象包含完整数据 |
+| 黑名单检查 | 配置 `token_blacklist=True` 后自动在 JWT 校验前检查 |
+
 ### 手动实现方案（需要完全自定义时）
 
 如果需要自定义缓存逻辑（如自定义 key、复杂的活跃判断等），可手动组装：
@@ -993,30 +1046,30 @@ auth = setup_auth(User, cache_ttl=60)  # 自动完成缓存 + 失效注册
 # app/api/dependencies.py
 
 from typing import Optional
+from sqlalchemy.orm import selectinload
 from yweb.cache import cached, cache_invalidator
 from yweb.auth import create_auth_dependency
 from app.services.jwt_service import jwt_manager
 from app.domain.auth.model.user import User
 
 
-# 带缓存的用户获取函数
-@cached(ttl=60, key_prefix="user:auth")
+# orm_model=User：缓存命中时自动 merge 回当前 Session，解决 DetachedInstanceError
+@cached(ttl=60, key_prefix="user:auth", orm_model=User)
 def get_user_by_id(user_id: int) -> Optional[User]:
-    """通过用户 ID 获取用户（带缓存）
-    
-    缓存失效：User 模型更新/删除时自动失效。
-    """
-    user = User.get_by_id(user_id)
+    """通过用户 ID 获取用户（带缓存）"""
+    user = User.query.options(
+        selectinload(User.roles)    # 调用方决定预加载什么关系
+    ).filter_by(id=user_id).first()
     if user and user.is_active:
         return user
     return None
 
 
-# 注册自动缓存失效（关键！）
+# 默认自动监听 M2M 集合变更（user.roles 增删时也触发缓存失效）
 cache_invalidator.register(User, get_user_by_id)
 
 
-# 创建认证依赖
+# 无需手动包装 session merge，orm_model 已处理
 get_current_user = create_auth_dependency(
     jwt_manager=jwt_manager,
     user_getter=get_user_by_id,
@@ -1186,7 +1239,38 @@ if stats['hit_rate'] < 0.8:
     pass
 ```
 
-### 6. 多实例部署注意事项
+### 6. 缓存 ORM 对象的正确姿势
+
+缓存 SQLAlchemy ORM 对象时，内存缓存（MemoryBackend）存储的是**对象引用**。请求结束后 Session 关闭，缓存对象变为 detached，后续请求访问 lazy 关系会抛 `DetachedInstanceError`。
+
+**解决方案：使用 `orm_model` + `watch_relationships`**
+
+```python
+from yweb.cache import cached, cache_invalidator
+from sqlalchemy.orm import selectinload
+
+# 1. orm_model=Product：缓存命中时自动 merge 回 Session
+@cached(ttl=300, orm_model=Product)
+def get_product(product_id: int):
+    return Product.query.options(
+        selectinload(Product.categories)   # 调用方决定预加载什么
+    ).filter_by(id=product_id).first()
+
+# 2. 注册自动失效（默认监听 M2M 集合变更）
+cache_invalidator.register(Product, get_product)
+```
+
+| 参数 | 作用 | 解决的问题 |
+|------|------|-----------|
+| `orm_model` | 缓存写入时 pickle 快照 + 命中时自动 `session.merge(load=False)` | expire_on_commit 清空属性 + DetachedInstanceError |
+| `watch_relationships` | 监听 M2M 集合 append/remove 事件 | M2M 变更后缓存脏数据 |
+| `selectinload(...)` | 预加载关系数据进缓存 | 每次命中都额外查询关系 |
+
+> **为什么需要 pickle 快照？** SQLAlchemy 默认 `expire_on_commit=True`，请求结束时 `session.commit()` 会从对象 `__dict__` 中 pop 掉所有属性值。如果 Memory 后端直接存储对象引用，commit 后缓存引用的属性就被清空了，后续命中等于白缓存。`orm_model` 在缓存写入时自动通过 pickle 创建独立副本（与 Redis 后端行为一致），使缓存完全不受 `expire_on_commit` 影响。
+>
+> **职责分离**：`orm_model` 和 `watch_relationships` 是缓存层的通用能力；预加载什么关系是业务层的决策。
+
+### 7. 多实例部署注意事项
 
 使用内存缓存时，多实例之间缓存不共享：
 
@@ -1239,6 +1323,14 @@ def get_user(user_id: int):
 | `@memory_cache(ttl, maxsize)` | 内存缓存装饰器（简写） |
 | `@redis_cache(redis, ttl)` | Redis 缓存装饰器（简写） |
 
+**`@cached` 关键参数：**
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `ttl` | int | 缓存过期时间（秒），默认 300 |
+| `invalidate_on` | Model/list/dict | 自动失效配置，ORM 模型变更时清除缓存 |
+| `orm_model` | Model class | 指定后，缓存命中时自动将 detached ORM 对象 merge 回当前 Session |
+
 ### CachedFunction 方法
 
 | 方法 | 说明 |
@@ -1255,8 +1347,25 @@ def get_user(user_id: int):
 
 | 方法 | 说明 |
 |------|------|
-| `register(model, func, key_extractor, events)` | 注册模型与缓存函数的关联 |
+| `register(model, func, key_extractor, events, watch_relationships)` | 注册模型与缓存函数的关联 |
 | `unregister(model, func)` | 取消注册 |
+| `track_dependencies(func, cache_key, result)` | 扫描结果建立反向索引（`@cached` 内部自动调用） |
+
+**`register` 关键参数：**
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `watch_relationships` | bool | 默认 True。自动监听模型上所有 ManyToMany 集合的 append/remove 事件，集合变更时触发缓存失效。模型无 M2M 关系时零开销 |
+
+**失效机制（双路径，自动选择）：**
+
+| 路径 | 触发条件 | 适用场景 |
+|------|---------|---------|
+| key_extractor 精确失效 | 实体变更时，用 `key_extractor(entity)` 作为参数调用 `func.invalidate()` | `get_user(user_id)` 等参数即 ID 的函数 |
+| 依赖追踪失效 | 缓存写入时扫描结果中的实体，建立反向索引；实体变更时按索引精确失效 | `get_orders(user_id, page)` 等列表/组合查询 |
+
+| 其他方法 | 说明 |
+|------|------|
 | `get_registrations(model)` | 获取注册信息 |
 | `enable()` | 启用自动失效 |
 | `disable()` | 禁用自动失效 |
@@ -1310,9 +1419,9 @@ def get_user(user_id: int):
 
 ## 完整示例
 
-### 推荐方式：setup_auth 一站式（自动缓存 + 自动失效）
+### 推荐方式：setup_auth 一站式（自动缓存 + 自动失效 + Session 安全）
 
-`setup_auth()` 内部自动完成 `@cached` + `cache_invalidator.register()` + `create_auth_dependency()`，无需手动编写：
+`setup_auth()` 内部自动完成 `@cached` + `cache_invalidator.register()` + `create_auth_dependency()` + 黑名单检查 + Session 安全 merge，无需手动编写：
 
 ```python
 # app/api/dependencies.py — 推荐
@@ -1321,15 +1430,21 @@ from yweb.auth import setup_auth
 from app.domain.auth.model.user import User
 from app.config import settings
 
-# 一站式认证设置（内部自动完成缓存 + 失效注册 + 依赖创建）
 auth = setup_auth(User, jwt_settings=settings.jwt, token_url="/api/v1/auth/token")
 
 # 路由中使用: Depends(auth.get_current_user)
 # JWT 管理器: auth.jwt_manager
-# 用户获取（带缓存）: auth.user_getter
+# 用户获取（带缓存 + Session 安全）: auth.user_getter
 # 手动失效: auth.invalidate_user_cache(user_id)
 # 缓存统计: auth.get_user_cache_stats()
 ```
+
+**框架自动处理的内部细节（用户无需关心）：**
+
+1. 首次查询时自动 `selectinload` 所有 ManyToMany 关系（roles/permissions 等）
+2. `@cached(orm_model=User)` 缓存命中时自动 `session.merge(load=False)`
+3. `cache_invalidator` 默认监听 M2M 集合变更（如 `user.roles.append(role)`）自动失效
+4. 配置 `token_blacklist=True` 时，自动在 JWT 校验前检查黑名单
 
 ### 手动方式：完全自定义（自动失效）
 
@@ -1339,32 +1454,30 @@ auth = setup_auth(User, jwt_settings=settings.jwt, token_url="/api/v1/auth/token
 # app/api/dependencies.py — 手动方式
 
 from typing import Optional
+from sqlalchemy.orm import selectinload
 from yweb.cache import cached, cache_invalidator
 from yweb.auth import create_auth_dependency
 from app.services.jwt_service import jwt_manager
 from app.domain.auth.model.user import User
 
 
-# ==================== 用户获取（带缓存 + 自动失效） ====================
-
-@cached(ttl=60, key_prefix="user:auth")
+# orm_model=User：缓存命中时自动 merge 回 Session
+@cached(ttl=60, key_prefix="user:auth", orm_model=User)
 def get_user_by_id(user_id: int) -> Optional[User]:
-    """通过用户 ID 获取用户（带缓存）
-    
-    缓存失效：User 模型更新/删除时自动失效（通过 cache_invalidator）。
-    """
-    user = User.get_by_id(user_id)
+    """通过用户 ID 获取用户（带缓存）"""
+    user = User.query.options(
+        selectinload(User.roles)
+    ).filter_by(id=user_id).first()
     if user and user.is_active:
         return user
     return None
 
 
-# 注册自动缓存失效：User 更新/删除时自动失效 get_user_by_id 缓存
+# 默认监听 M2M 集合变更（user.roles 增删时也失效）
 cache_invalidator.register(User, get_user_by_id)
 
 
-# ==================== 认证依赖 ====================
-
+# 无需手动 session merge 包装
 get_current_user = create_auth_dependency(
     jwt_manager=jwt_manager,
     user_getter=get_user_by_id,
@@ -1377,8 +1490,6 @@ get_current_user_optional = create_auth_dependency(
     auto_error=False,
 )
 
-
-# ==================== 缓存管理（可选手动控制） ====================
 
 def invalidate_user_cache(user_id: int) -> bool:
     """手动失效用户缓存（特殊场景使用）

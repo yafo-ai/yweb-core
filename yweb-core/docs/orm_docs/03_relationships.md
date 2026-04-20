@@ -13,6 +13,9 @@
 | **多对一** | 多条记录对应一条记录 | 员工 → 部门 |
 | **多对多** | 多条记录对应多条记录 | 用户 ↔ 角色 |
 | **自关联** | 记录关联同表的其他记录 | 部门的父子层级 |
+| **值对象嵌入** | 值对象字段展开存储到父表 | 地址、金额区间、联系方式 |
+
+> **值对象嵌入（OwnsOne）** 不同于上面的实体关系，它将值对象的字段展开到父模型的同一张表中，无外键、无子表。详见 [21_OwnsOne 值对象嵌入](21_owns_one.md)。
 
 ### 定义方式对比
 
@@ -862,6 +865,7 @@ user.save(commit=True)
 | 需要级联软删除 | `fields.ManyToOne` | 支持 `on_delete` 配置，推荐日常使用 |
 | 一对一关系 | `fields.OneToOne` 或 `ForeignKeyField + ONE_TO_ONE` | 自动添加 `uselist=False` |
 | 多对多关系 | `fields.ManyToMany` | 自动创建中间表 |
+| 值对象嵌入 | `fields.OwnsOne` | 单表展开，无外键 |
 
 ```python
 # ✅ 推荐：使用 fields.* API
@@ -914,9 +918,12 @@ employee_model.leading_departments = relationship(
 
 ```
 定义模型关系？
-    ├── 需要级联软删除 → fields.ManyToOne / fields.ManyToMany
-    ├── 简单外键，无级联需求 → ForeignKeyField
-    └── 框架内部动态添加 → 原生 relationship() + back_populates
+    ├── 子对象是独立实体？
+    │     ├── 需要级联软删除 → fields.ManyToOne / fields.ManyToMany
+    │     ├── 简单外键，无级联需求 → ForeignKeyField
+    │     └── 框架内部动态添加 → 原生 relationship() + back_populates
+    └── 子对象是值对象（无独立生命周期）？
+          └── fields.OwnsOne（展开到父表，详见 21_owns_one.md）
 ```
 
 ---
@@ -958,3 +965,4 @@ class Article(TaggableMixin, BaseModel):
 - [04_CRUD操作](04_crud_operations.md) - 学习基本增删改查
 - [08_级联软删除](08_cascade_soft_delete.md) - 了解 soft_relationship 详细用法
 - [04_查询与过滤](04_query_and_filter.md) - 学习高级查询技巧
+- [21_OwnsOne 值对象嵌入](21_owns_one.md) - 了解值对象嵌入（OwnsOne）

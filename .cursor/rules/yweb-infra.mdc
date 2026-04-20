@@ -1,6 +1,6 @@
 ---
-description: 使用缓存（@cached）、异常处理（Err）、日志（get_logger）、配置（AppSettings/YAML）、文件存储、定时任务（Scheduler）时自动激活。
-globs: yweb-core/yweb/cache/**/*.py, yweb-core/yweb/log/**/*.py, yweb-core/yweb/config/**/*.py, yweb-core/yweb/storage/**/*.py, yweb-core/yweb/scheduler/**/*.py, yweb-core/yweb/exceptions/**/*.py, yweb-core/yweb/middleware/**/*.py, **/config.py, **/logger.py, **/startup.py
+description: 使用缓存（@cached）、异常处理（Err）、日志（get_logger）、配置（AppSettings/YAML）、文件存储、定时任务（Scheduler）、限流（setup_ratelimit）时自动激活。
+globs: yweb-core/yweb/cache/**/*.py, yweb-core/yweb/log/**/*.py, yweb-core/yweb/config/**/*.py, yweb-core/yweb/storage/**/*.py, yweb-core/yweb/scheduler/**/*.py, yweb-core/yweb/exceptions/**/*.py, yweb-core/yweb/middleware/**/*.py, yweb-core/yweb/ratelimit/**/*.py, **/config.py, **/logger.py, **/startup.py
 ---
 
 # YWeb 基础设施模块规范
@@ -19,5 +19,6 @@ globs: yweb-core/yweb/cache/**/*.py, yweb-core/yweb/log/**/*.py, yweb-core/yweb/
 | **配置** | `AppSettings` + YAML + 环境变量 | `yweb-core/docs/02_config_guide.md` |
 | **文件存储** | 本地 / OSS / S3 | `yweb-core/docs/10_storage_guide.md` |
 | **定时任务** | `Scheduler` + Builder 模式 | `yweb-core/docs/09_scheduler_guide.md` |
+| **限流** | `setup_ratelimit(app)` + `@limiter.limit()` | `yweb-core/docs/14_ratelimit_guide.md` |
 
 使用前**必须先阅读对应文档**，不要凭猜测编码。

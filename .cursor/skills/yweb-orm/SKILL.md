@@ -66,6 +66,12 @@ YWeb ORM 基于 **SQLAlchemy**，采用 **Active Record 模式**：
 | `yweb-core/docs/orm_docs/14_schema_validation.md` | Schema 与验证 |
 | `yweb-core/docs/orm_docs/15_fastapi_integration.md` | FastAPI 集成 |
 
+### 值对象与 DDD 扩展
+
+| 文档路径 | 说明 |
+|---------|------|
+| `yweb-core/docs/orm_docs/21_owns_one.md` | OwnsOne 值对象嵌入（OwnedType 定义、查询代理、嵌套/平铺序列化） |
+
 ### 高级混入（Mixin）
 
 | 文档路径 | 说明 |
@@ -87,5 +93,6 @@ YWeb ORM 基于 **SQLAlchemy**，采用 **Active Record 模式**：
 1. 定义新模型前，阅读 `02_model_definition.md`
 2. 编写 CRUD 操作前，阅读 `03_crud_operations.md`
 3. 涉及事务管理时，阅读 `11_transaction.md` 和 `16_transaction_manager.md`
-4. 使用高级混入（树形/排序/状态机/标签）前，阅读对应文档
-5. 不确定时，先从 `03_orm_guide.md` 基础指南开始
+4. 需要嵌入值对象（地址、金额区间等）时，阅读 `21_owns_one.md`
+5. 使用高级混入（树形/排序/状态机/标签）前，阅读对应文档
+6. 不确定时，先从 `03_orm_guide.md` 基础指南开始

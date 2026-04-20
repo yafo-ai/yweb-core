@@ -28,6 +28,16 @@ API 层 (路由) → Service 层 (业务编排) → Domain 层 (领域模型)
 | Service 层 | 跨聚合协调、事务管理、权限检查 | HTTP 感知、直接返回 Response |
 | Domain 层 | 单聚合业务规则、数据验证、状态变更 | 调用其他聚合、HTTP 感知 |
 
+## 聚合内建模：实体关系 vs 值对象
+
+| 场景 | 推荐方式 | 说明 |
+|------|---------|------|
+| 子对象有独立生命周期、需独立增删改查 | `OneToOne` / `ManyToOne` | 两张表，外键关联 |
+| 子对象是聚合内部状态、无独立主键 | `OwnsOne` | 单表展开，值对象语义 |
+
+典型 `OwnsOne` 场景：地址、金额区间、联系方式、审计信息、时间窗口等。
+详见 `yweb-core/docs/orm_docs/21_owns_one.md`。
+
 ## DTO 使用要点
 
 - **响应模型**：继承 `DTO`（来自 `yweb`），使用 `from_entity()` / `from_page()` 转换
