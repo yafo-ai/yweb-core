@@ -389,7 +389,8 @@ class TestSchedulerWithDatabaseHistory:
         assert len(executed) == 1
         
         # 验证历史记录（需要查询数据库）
-        history = SchedulerJobHistory.query.filter(
+        # 位于 async 测试中：HybridQueryProperty 下 .first() 返回 _HybridTerminal，需 await
+        history = await SchedulerJobHistory.query.filter(
             SchedulerJobHistory.run_id == "test_run_history"
         ).first()
         
@@ -397,3 +398,46 @@ class TestSchedulerWithDatabaseHistory:
         assert history is not None
         assert history.job_code == "HISTORY_TEST"
         assert history.status == "success"
+
+    @pytest.mark.asyncio
+    async def test_async_executor_records_failure_under_hybridquery(
+        self, scheduler_with_db, scheduler_db_session, scheduler_models
+    ):
+        """Phase 5B.1 回归：async executor 路径下任务抛异常时历史记录正确落库
+
+        背景：Phase 4 前 scheduler.py 里 async _execute_job 直接调同步
+        record_start/record_failure，在 HybridQueryProperty 下 .first() 返回
+        _HybridTerminal → record_* 全部失败（被 except 吞），历史记录不落库。
+        Phase 5B.1 把 3 处调用点改成 run_in_threadpool 包装后应正常落库。
+        """
+        SchedulerJobHistory = scheduler_models.SchedulerJobHistory
+        scheduler = scheduler_with_db
+
+        @scheduler.cron("0 8 * * *", code="FAIL_TEST", name="失败测试")
+        async def failing_job(ctx: JobContext):
+            raise ValueError("intentional failure")
+
+        job_info = scheduler._jobs["FAIL_TEST"]
+        context = JobContext(
+            job_id=job_info["id"],
+            job_code="FAIL_TEST",
+            job_name="失败测试",
+            run_id="test_run_failure",
+            scheduled_time=datetime.now(),
+            start_time=datetime.now(),
+        )
+
+        # _execute_job 内部会 except Exception + record_failure，不往外抛
+        await scheduler._execute_job(job_info, context)
+
+        # 验证 run_in_threadpool 路径下 record_start + record_failure 都真的落了库
+        history = await SchedulerJobHistory.query.filter(
+            SchedulerJobHistory.run_id == "test_run_failure"
+        ).first()
+
+        assert history is not None, (
+            "历史记录未落库 —— Phase 5B.1 的 run_in_threadpool 包装可能被回滚"
+        )
+        assert history.job_code == "FAIL_TEST"
+        assert history.status == "failed"
+        assert "intentional failure" in (history.error or "")

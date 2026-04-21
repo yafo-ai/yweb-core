@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker, scoped_session
 from sqlalchemy.pool import StaticPool
 
 from yweb.orm import CoreModel, BaseModel
+from yweb.orm.hybrid_query import HybridQueryProperty
 from yweb.scheduler import create_scheduler_models
 
 
@@ -63,21 +64,36 @@ def scheduler_db_session(scheduler_engine, scheduler_models):
     # scopefunc 返回固定值，确保所有调用共享同一 session
     session_scope = scoped_session(SessionLocal, scopefunc=lambda: 0)
     
-    # 设置 CoreModel.query
-    # 注意：此处暂未用 HybridQueryProperty 包装，因为 scheduler 生产代码
-    # （yweb/scheduler/history.py 中的 record_start/record_success/record_failure）
-    # 在 async 上下文下直接调用同步 .query.first()，Phase 4 上线 HybridQuery 后
-    # 会返回 _HybridTerminal 导致 record_* 全部失败。
-    # 该问题已记入 23 号清单 Phase 5B，修复后此处将改回 HybridQueryProperty 包装。
-    CoreModel.query = session_scope.query_property()
+    # 设置 CoreModel.query —— 对齐生产路径：用 HybridQueryProperty 包装
+    # Phase 5B.1 之后生效：scheduler.py 的 async _execute_job 已把
+    # history_manager.record_* 全部改成 run_in_threadpool 包装，
+    # 不会再触发"_HybridTerminal 当成 Model 实例"的 bug
+    #
+    # 注意：读取原 query 必须走 __dict__，不能用 getattr()。
+    # 因为上游可能已把 CoreModel.query 设为 query_property/HybridQueryProperty，
+    # getattr 会触发 descriptor.__get__(None, CoreModel)，对抽象基类发起
+    # session.query(CoreModel) → ArgumentError。
+    _SENTINEL = object()
+    previous_query = CoreModel.__dict__.get("query", _SENTINEL)
+    CoreModel.query = HybridQueryProperty(session_scope.query_property())
     
-    yield session_scope()
-    
-    # 清理 - 忽略可能的线程错误
     try:
-        session_scope.remove()
-    except Exception:
-        pass
+        yield session_scope()
+    finally:
+        # 关键：无论测试结果如何，都要恢复 CoreModel.query，避免跨模块测试污染
+        # （详见 23 号清单 Phase 5B.1 验收项）
+        if previous_query is _SENTINEL:
+            try:
+                del CoreModel.query
+            except AttributeError:
+                pass
+        else:
+            CoreModel.query = previous_query
+        # 清理 - 忽略可能的线程错误
+        try:
+            session_scope.remove()
+        except Exception:
+            pass
 
 
 @pytest.fixture

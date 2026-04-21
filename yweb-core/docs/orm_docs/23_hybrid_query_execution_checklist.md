@@ -283,28 +283,29 @@ commit `0a5e5a8` 已把生产 async 路由批量改为 def；Phase 0 扫描也�
 
 > 本 Phase 由 Phase 5 执行暴露的生产代码 bug + API gap 派生。采用 B+C 混合方案：Phase 5 回滚尝试，此处独立修复 + 独立 commit。完整背景见 `assets/hq_phase5_tests.txt`。
 
-- [ ] **5B.1** Scheduler async executor 历史记录修复
+- [x] **5B.1** Scheduler async executor 历史记录修复  ✅ 2026-04-21
   - 问题：`yweb/scheduler/scheduler.py` 的 `async def _execute_job()` 直接调用同步方法 `history_manager.record_start / record_success / record_failure`（`yweb/scheduler/history.py`），后者内部走 `HistoryModel.query.filter(...).first()`。Phase 4 上线 `HybridQueryProperty` 后 `.first()` 在 async 上下文返回 `_HybridTerminal`，导致：
     - `record_start` 被当成「主键冲突」重试 5 次失败 → `PendingRollbackError`
     - `record_success` / `record_failure` 走到 `history.status = ...` → `AttributeError`（被 `except Exception` 吞）
   - 历史定性：此 bug 在 Phase 4 之前就已存在（`AsyncSafeQueryProperty` 同样抛 `SynchronousOnlyOperation` 被 except 吞），scheduler async executor 的历史记录功能**在生产里一直是静默坏的**。Phase 4 把它从「静默失败」升级为「显性失败」
-  - 修复动作（改 `yweb/scheduler/scheduler.py` 3 处调用点）：
+  - 修复动作（改 `yweb/scheduler/scheduler.py` **4 处调用点** —— 原估 3 处，实际 `record_failure` 在 timeout + exception 两分支各出现 1 次）：
     ```python
     from starlette.concurrency import run_in_threadpool
-    # 原：history_manager.record_start(context)
     await run_in_threadpool(history_manager.record_start, context)
-    # 原：history_manager.record_success(context, result, duration_ms)
     await run_in_threadpool(history_manager.record_success, context, result, duration_ms)
-    # 原：history_manager.record_failure(context, error_msg, error_tb, duration_ms)
-    await run_in_threadpool(history_manager.record_failure, context, error_msg, error_tb, duration_ms)
+    await run_in_threadpool(history_manager.record_failure, context, error_msg, error_tb, duration_ms)  # timeout 分支
+    await run_in_threadpool(history_manager.record_failure, context, error_msg, error_tb, duration_ms)  # exception 分支
     ```
+  - 执行要点（踩坑记录）：
+    - `tests/test_scheduler/conftest.py` 的 `previous_query = getattr(CoreModel, "query", _SENTINEL)` 会触发 `HybridQueryProperty.__get__(None, CoreModel)` → 对抽象基类发起 `session.query(CoreModel)` 抛 `ArgumentError`。**必须用 `CoreModel.__dict__.get("query", _SENTINEL)` 绕过 descriptor 协议**
+    - teardown 必须完整恢复：若先前没有 `query` 属性则 `del`，否则写回原值（不能直接置空）
   - 验收：
-    - [ ] `tests/test_scheduler/integration/test_history.py` 全绿
-    - [ ] 新增 1 条回归测试：在 async executor 路径下验证「历史记录真的落了库 + status 正确」
-    - [ ] `tests/test_scheduler/conftest.py:67` 改回 `CoreModel.query = HybridQueryProperty(session_scope.query_property())`
-    - [ ] `tests/test_scheduler/conftest.py` 的 `scheduler_db_session` teardown 增加「恢复 `CoreModel.query` 为 `HybridQueryProperty`」，治 pre-existing 跨模块测试污染（详见 `hq_phase5_tests.txt` 末节）
-    - [ ] `tests/test_scheduler/integration/test_history.py:392` 改回 `await ... first()`
-    - [ ] 全量回归不新增失败 + `pytest tests/test_scheduler/ tests/test_orm/unit/` 子集不再 cross-contaminate
+    - [x] `tests/test_scheduler/integration/test_history.py` 全绿（20/20）
+    - [x] 新增 1 条回归测试：`test_async_executor_records_failure_under_hybridquery` 验证 async executor 路径下「record_start + record_failure 都真的落了库 + status=failed + error 信息正确」
+    - [x] `tests/test_scheduler/conftest.py:67` 改回 `CoreModel.query = HybridQueryProperty(session_scope.query_property())`
+    - [x] `tests/test_scheduler/conftest.py` 的 `scheduler_db_session` teardown 增加「保存/恢复 `CoreModel.query`」，治 pre-existing 跨模块测试污染（`test_auth → test_scheduler` 原先会因 descriptor 残留 + CoreModel 抽象基类查询报 `ArgumentError` 导致 12 errors，修复后归零）
+    - [x] `tests/test_scheduler/integration/test_history.py:392` 改回 `await ... first()`
+    - [x] 全量回归：**2696 passed / 0 failed / 0 errors**（vs Phase 5 基线 2695 passed，正好 +1 新增回归测试，其它零差异）
 
 - [ ] **5B.2** `db_session_scope` 在 async 上下文下的 API gap
   - 问题：doc 22 §7.2.3 原设计的「脚本入口 `with db_session_scope(): await q.all()`」当前会在 `get_session()` 内抛 `SynchronousOnlyOperation`（`check_async_safety()` 命中）
@@ -449,3 +450,4 @@ commit `0a5e5a8` 已把生产 async 路由批量改为 def；Phase 0 扫描也�
 | 2026-04-21 | 执行 Phase 3 — HybridQuery 终端方法：`_HybridTerminal` 实装 `__await__`（`run_in_threadpool`）/ `_run_sync()` / `_consumed` 一次性保护；`HybridQuery` 上追加 10 个终端方法（`all/first/one/one_or_none/scalar/count/get/delete/update/paginate`），统一走 `_terminal()` helper 应用 A + A2 模板；新增 30 条单测（同步 12 + async 10 + 一次性 3 + 线程池 1 + bypass 2 + A2 漏 await 2）全绿。`scalars` 未实现（SA 2.0 Query 未暴露 + 仓内 0 处使用） |
 | 2026-04-21 | 执行 Phase 4 — 接入 CoreModel.query：`hybrid_query.py` 加 `HybridQueryProperty` 描述符（默认 on / `YWEB_HYBRID_QUERY=off` 回退 `AsyncSafeQueryProperty`）；`db_session.py` 置换挂载点；`core_model.paginate()` 加 HybridQuery 剥壳；`async_safety.py` docstring 改写角色分工；`yweb/orm/__init__.py` 导出 `HybridQuery`。全量 pytest：2673 passed / 14 pre-existing (slowapi 缺失，与 Phase 4 无关) / 0 新失败。结果存入 `assets/hq_phase4_failing_async_tests.txt` |
 | 2026-04-21 | 执行 Phase 5（B+C 混合）——**测试迁移 + lifecycle**：⑴ 尝试 scheduler fixture 对齐 `HybridQueryProperty` 暴露生产 bug（`yweb/scheduler/scheduler.py` async `_execute_job` 直接调用同步 `history_manager.record_*` → `.first()` 返回 `_HybridTerminal` 导致「主键重试失败 + 属性访问失败」），确认该 bug 在 Phase 4 前就已静默存在；⑵ 采用 B+C 混合：本轮回滚 scheduler 改动 + 注释指向新 **Phase 5B** 修复；⑶ 新增 `tests/test_orm/unit/test_hybrid_query_lifecycle.py` 8 tests（L1 串行多终端清理 / L2 异常路径清理 / L4 无中间件反例 via `ScopedRegistry` 穿透 / L5 gather 并发一致性 / L6a-d 脚本入口 4 场景，含 `db_session_scope` 在 async 下的 known gap）全绿；⑷ 5.3 懒加载 / pool 压测 / CancelledError 延后至 Phase 7 发布前补测。全量回归 2663 passed，与 Phase 4 基线零差异。详见 `assets/hq_phase5_tests.txt` |
+| 2026-04-21 | 执行 Phase 5B.1 — Scheduler async executor 历史记录修复：⑴ `yweb/scheduler/scheduler.py` 新增 `from starlette.concurrency import run_in_threadpool` 并把 `history_manager.record_start / record_success / record_failure(timeout) / record_failure(exception)` **4 处**调用全部 `await run_in_threadpool(...)` 包装；⑵ `tests/test_scheduler/conftest.py` 改回 `HybridQueryProperty` 包装并加 setup/teardown 的 save/restore（踩坑：`getattr(CoreModel, "query")` 会触发 descriptor → 对抽象基类查询 `ArgumentError`，必须改走 `CoreModel.__dict__.get`）；⑶ `tests/test_scheduler/integration/test_history.py:392` 改回 `await ... first()`；⑷ 新增回归测试 `test_async_executor_records_failure_under_hybridquery` 验证 async executor 失败路径下 `record_start + record_failure` 同时落库 + `status=failed` + `error` 包含异常信息；⑸ 全量回归 **2696 passed / 0 failed / 0 errors**，vs Phase 5 基线 2695 passed 正好 +1（新增回归），其它零差异；顺带修掉 pre-existing `test_auth → test_scheduler` 跨模块污染（原先 12 errors 归零）。5B.2（`db_session_scope` async gap）仍待用户拍板 A/B/C |

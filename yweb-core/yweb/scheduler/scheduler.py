@@ -31,6 +31,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.jobstores.memory import MemoryJobStore
 from apscheduler.executors.asyncio import AsyncIOExecutor
 from apscheduler.triggers.base import BaseTrigger
+from starlette.concurrency import run_in_threadpool
 from apscheduler.events import (
     EVENT_JOB_EXECUTED,
     EVENT_JOB_ERROR,
@@ -1461,8 +1462,12 @@ class Scheduler:
                 return
         
         # 记录执行开始
+        # 注意：record_start 是同步方法，内部走 Model.query.first() 等同步 ORM；
+        # 在 async executor 上下文里必须用 run_in_threadpool 包装，否则 Phase 4
+        # 上线 HybridQueryProperty 后 .first() 会返回 _HybridTerminal，导致
+        # 主键冲突误判 → 5 次重试失败。详见 23 号清单 Phase 5B.1。
         history_manager = self._get_history_manager()
-        history_manager.record_start(context)
+        await run_in_threadpool(history_manager.record_start, context)
         
         try:
             # 更新统计
@@ -1480,8 +1485,10 @@ class Scheduler:
             job_info["success_count"] = job_info.get("success_count", 0) + 1
             job_info["last_status"] = "success"
             
-            # 记录执行成功
-            history_manager.record_success(context, result, duration_ms)
+            # 记录执行成功（同上，必须 run_in_threadpool）
+            await run_in_threadpool(
+                history_manager.record_success, context, result, duration_ms
+            )
             
             # 触发成功事件
             event = JobExecutedEvent(
@@ -1514,8 +1521,10 @@ class Scheduler:
             job_info["fail_count"] = job_info.get("fail_count", 0) + 1
             job_info["last_status"] = "timeout"
             
-            # 记录执行失败
-            history_manager.record_failure(context, error_msg, error_tb, duration_ms)
+            # 记录执行失败（同上，必须 run_in_threadpool）
+            await run_in_threadpool(
+                history_manager.record_failure, context, error_msg, error_tb, duration_ms
+            )
             
             # 触发失败事件
             event = JobErrorEvent(
@@ -1555,8 +1564,10 @@ class Scheduler:
             job_info["fail_count"] = job_info.get("fail_count", 0) + 1
             job_info["last_status"] = "failed"
             
-            # 记录执行失败
-            history_manager.record_failure(context, error_msg, error_tb, duration_ms)
+            # 记录执行失败（同上，必须 run_in_threadpool）
+            await run_in_threadpool(
+                history_manager.record_failure, context, error_msg, error_tb, duration_ms
+            )
             
             # 触发失败事件
             event = JobErrorEvent(
