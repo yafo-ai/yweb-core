@@ -339,12 +339,17 @@ class DatabaseManager:
         self._session_scope = scoped_session(self._session_maker, scopefunc=scopefunc)
         
         # 自动设置 ORM query 属性（延迟导入避免循环依赖）
+        # 默认挂 HybridQueryProperty：Model.query 返回 HybridQuery 同步/异步双模代理
+        # 紧急回滚：设置 YWEB_HYBRID_QUERY=off 退回旧的 AsyncSafeQueryProperty 行为
         if auto_setup_query:
             from .core_model import CoreModel
-            from .async_safety import AsyncSafeQueryProperty
+            from .hybrid_query import HybridQueryProperty
             raw_query_property = self._session_scope.query_property()
-            CoreModel.query = AsyncSafeQueryProperty(raw_query_property)
-            logger.info("CoreModel.query 属性已自动设置（含 async 安全检测）")
+            CoreModel.query = HybridQueryProperty(raw_query_property)
+            logger.info(
+                "CoreModel.query 属性已自动设置（HybridQuery 同步/异步双模；"
+                "YWEB_HYBRID_QUERY=off 可回退旧行为）"
+            )
         
         logger.info("数据库session创建成功")
         

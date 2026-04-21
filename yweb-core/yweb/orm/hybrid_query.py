@@ -26,15 +26,17 @@ Phase 4（未开始）：接入 ``CoreModel.query`` —— 当前仍是 ``AsyncS
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING, Any, Callable, Generator, Generic, TypeVar, Union
 
-from .async_safety import SynchronousOnlyOperation, is_in_async_context
+from .async_safety import AsyncSafeQueryProperty, SynchronousOnlyOperation, is_in_async_context
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Query, Session
 
 __all__ = [
     "HybridQuery",
+    "HybridQueryProperty",
     "_HybridTerminal",
 ]
 
@@ -234,3 +236,43 @@ class HybridQuery(Generic[T]):
                 schema=schema,
             )
         )
+
+
+class HybridQueryProperty:
+    """``CoreModel.query`` 的描述符 —— 默认走 HybridQuery，支持环境变量回退
+
+    **默认行为（``YWEB_HYBRID_QUERY=on`` 或未设置）**：
+        ``Model.query`` 返回 :class:`HybridQuery` 包装，其终端方法在同步上下文
+        立即求值、在 async 上下文返回 :class:`_HybridTerminal` 供 await。
+        不在 ``__get__`` 时调用 :func:`check_async_safety` —— async 检测交由
+        HybridQuery 的终端方法 / 隐式终端禁用处理（避免 async 路由刚访问
+        ``Model.query.filter_by(...)`` 就炸）。
+
+    **回退行为（``YWEB_HYBRID_QUERY=off``）**：
+        退回到 Phase 4 之前的 :class:`AsyncSafeQueryProperty`：返回原生
+        SA ``Query``，访问瞬间若处于 async 上下文直接抛
+        :class:`SynchronousOnlyOperation`（与重构前行为完全一致，
+        供紧急回滚使用，doc 22 §7.4）。
+
+    使用方式（框架内部，``db_session.py`` 挂载）::
+
+        raw_qp = self._session_scope.query_property()
+        CoreModel.query = HybridQueryProperty(raw_qp)
+    """
+
+    __slots__ = ("_raw_qp", "_async_safe_qp")
+
+    def __init__(self, raw_query_property: Any) -> None:
+        self._raw_qp = raw_query_property
+        self._async_safe_qp = AsyncSafeQueryProperty(raw_query_property)
+
+    def __get__(self, obj: Any, cls: Any) -> Any:
+        if self._is_rollback_mode():
+            return self._async_safe_qp.__get__(obj, cls)
+
+        raw_query = self._raw_qp.__get__(obj, cls)
+        return HybridQuery(raw_query)
+
+    @staticmethod
+    def _is_rollback_mode() -> bool:
+        return os.environ.get("YWEB_HYBRID_QUERY", "on").lower() == "off"

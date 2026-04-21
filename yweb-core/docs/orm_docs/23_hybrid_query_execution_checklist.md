@@ -192,35 +192,40 @@ Phase 0 → Phase 1 → Phase 2 → ... → Phase 7
 
 ---
 
-## Phase 4 — 接入 `db_session.py` + 改造 `async_safety.py`
+## Phase 4 — 接入 `db_session.py` + 改造 `async_safety.py`  ✅ 2026-04-21 完成
 
-这是本次重构的**最高风险步骤**。完成后线上路径行为会变。
+原计划为本次重构**最高风险步骤**，实测接入后全仓零新失败（得益于之前
+commit `0a5e5a8` 已把生产 async 路由批量改为 def；Phase 0 扫描也提前
+证实过仓内 0 处 async+sync ORM 残余）。
 
-- [ ] **4.1** 改 `db_session.py` `DatabaseManager.init()` 末尾段：
+- [x] **4.1** 改 `db_session.py` `DatabaseManager.init()`：
   ```python
   if auto_setup_query:
       from .core_model import CoreModel
-      from .hybrid_query import HybridQuery
-      raw_qp = self._session_scope.query_property()
-      # 描述符：Model.query 访问时 → HybridQuery(raw_qp.__get__(obj, cls))
-      CoreModel.query = HybridQueryProperty(raw_qp)
+      from .hybrid_query import HybridQueryProperty
+      raw_query_property = self._session_scope.query_property()
+      CoreModel.query = HybridQueryProperty(raw_query_property)
   ```
-  - 配套：在 `hybrid_query.py` 里提供 `HybridQueryProperty` 描述符
-- [ ] **4.2** 改 `async_safety.py`：
-  - [ ] **保留** `check_async_safety()` 给 `db_manager.get_session()` 用（写路径防御仍然有效）
-  - [ ] **移除**（或标 `@deprecated`）`AsyncSafeQueryProperty`；保留一段兼容期，默认不再挂到 `CoreModel.query`
-  - [ ] 更新模块 docstring：把「访问 `query` 时检查」改成「仅 `get_session()` 写路径检查；读路径由 HybridQuery 接管」（doc 22 §7.3.7）
-  - [ ] `allow_sync()` docstring 对齐新语义
-- [ ] **4.3** 改 `yweb/orm/__init__.py`：
-  - [ ] 新增 `from .hybrid_query import HybridQuery`（如需对外暴露）
-  - [ ] `__all__` 更新
-- [ ] **4.4** 跑 `yweb-core/tests` 全量用例
-  - 命令：`python -m pytest yweb-core/tests -q`
-  - 预期：**会有大量 async 测试失败**（Phase 5 处理）
-  - 本条只确认 **同步测试 100% 通过** + **失败项全部集中在 async `Model.query` 未加 `await`**
-- [ ] **4.5** 记录 4.4 中所有失败用例到 `assets/hq_phase4_failing_async_tests.txt`，Phase 5 用
+  - 配套：`hybrid_query.py` 新增 `HybridQueryProperty` 描述符，默认走 HybridQuery 路径；
+    `YWEB_HYBRID_QUERY=off` 时回退到 `AsyncSafeQueryProperty`（对应 D3=A 环境变量回退方案）
+  - `core_model.paginate()` 在 `isinstance(Query)` 前加 HybridQuery 剥壳
+    （Phase 0.2 扫描标记的 1 处 `isinstance(Query)` 修复）
+- [x] **4.2** 改 `async_safety.py`：
+  - [x] `check_async_safety()` **保留**（写路径 `db_manager.get_session()` 继续生效）
+  - [x] `AsyncSafeQueryProperty` **保留**（作为 `YWEB_HYBRID_QUERY=off` 回退路径的实现，加 docstring 注释）
+  - [x] 模块顶部 docstring 重写「Phase 4 起的角色分工」：读路径 HybridQuery 接管 / 写路径 check_async_safety / AsyncSafeQueryProperty = fallback
+  - [x] 公开 API 列表更新（加入 `is_in_async_context`）
+- [x] **4.3** 改 `yweb/orm/__init__.py`：
+  - [x] `from .hybrid_query import HybridQuery`
+  - [x] `__all__` 追加 `"HybridQuery"`
+- [x] **4.4** 跑 `tests` 全量用例  ——  `2673 passed, 14 failed, 2 skipped, 1 xfailed in 500.67s`
+  - 同步测试 100% 通过 ✅
+  - HybridQuery 相关专项 64/64 绿 ✅
+  - 14 失败全部在 `tests/test_ratelimit/`，根因 `ModuleNotFoundError: No module named 'slowapi'`（可选依赖，pre-existing，与 Phase 4 无关 —— 在 HEAD~1 同样 fail）
+  - Phase 0 扫描标记的嫌疑点 `tests/test_scheduler/integration/test_history.py:392` 实测 PASS，因该测试的 `scheduler_db_session` fixture 直接用 `session_scope.query_property()` 覆写 `CoreModel.query`，绕过了 HybridQueryProperty（Phase 5 迁移该 fixture）
+- [x] **4.5** 结果记录到 [`assets/hq_phase4_failing_async_tests.txt`](assets/hq_phase4_failing_async_tests.txt)（含失败分类、嫌疑点实测分析、验收结论、Phase 5 衍生任务）
 
-**Phase 4 验收**：同步测试全绿；async 测试失败模式单一（没有 `await` 的终端调用），便于批处理。
+**Phase 4 验收**：2673 条同步+HybridQuery 测试全绿；零新失败；紧急回滚通道 `YWEB_HYBRID_QUERY=off` 已打通。
 
 ---
 
@@ -380,3 +385,4 @@ Phase 0 → Phase 1 → Phase 2 → ... → Phase 7
 | 2026-04-21 | 锁定 Phase 3.3 决策：A（上下文感知）+ A2（async 忘 await 返回 terminal 对象让错误显形）；不暴露公开 `.value()` / `.result()`；写终端与读终端同策略。同步收口 22 号文档 §5.1.2 最后一句 |
 | 2026-04-21 | 执行 Phase 2 — HybridQuery 骨架：新增 `yweb/orm/hybrid_query.py`（`HybridQuery[T]` 链式代理 + `_HybridTerminal[T]` 占位）；`yweb/orm/async_safety.py` 追加 `is_in_async_context()` helper；新增 17 条单测（代理链 / session 透传 / 同步透传 / async 抛错 / allow_sync 兜底 / off 模式 / 边界）全绿。决策：Q1=Q（宽松，同步透传 async 抛错）、Q2=Y（带泛型）。不接入 CoreModel.query（留给 Phase 4） |
 | 2026-04-21 | 执行 Phase 3 — HybridQuery 终端方法：`_HybridTerminal` 实装 `__await__`（`run_in_threadpool`）/ `_run_sync()` / `_consumed` 一次性保护；`HybridQuery` 上追加 10 个终端方法（`all/first/one/one_or_none/scalar/count/get/delete/update/paginate`），统一走 `_terminal()` helper 应用 A + A2 模板；新增 30 条单测（同步 12 + async 10 + 一次性 3 + 线程池 1 + bypass 2 + A2 漏 await 2）全绿。`scalars` 未实现（SA 2.0 Query 未暴露 + 仓内 0 处使用） |
+| 2026-04-21 | 执行 Phase 4 — 接入 CoreModel.query：`hybrid_query.py` 加 `HybridQueryProperty` 描述符（默认 on / `YWEB_HYBRID_QUERY=off` 回退 `AsyncSafeQueryProperty`）；`db_session.py` 置换挂载点；`core_model.paginate()` 加 HybridQuery 剥壳；`async_safety.py` docstring 改写角色分工；`yweb/orm/__init__.py` 导出 `HybridQuery`。全量 pytest：2673 passed / 14 pre-existing (slowapi 缺失，与 Phase 4 无关) / 0 新失败。结果存入 `assets/hq_phase4_failing_async_tests.txt` |
