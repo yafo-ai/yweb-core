@@ -110,28 +110,35 @@ Phase 0 → Phase 1 → Phase 2 → ... → Phase 7
 
 ---
 
-## Phase 2 — HybridQuery 骨架（不发 SQL，纯代理）
+## Phase 2 — HybridQuery 骨架（不发 SQL，纯代理）  ✅ 2026-04-21 完成
 
 目的：实现「链式阶段不发 SQL」这一层，并在 `def` 路由/同步测试中验证行为与原 `Query` 一致。
 
-- [ ] **2.1** 新建 `yweb-core/yweb/orm/hybrid_query.py`
-  - 类：`HybridQuery`（链式代理）
-  - 实现 `__init__(self, query: Query)`；`__getattr__` 透传 `query`；返回值若是 `Query`，再包一层 `HybridQuery`，否则原样返回
-  - 实现 `__repr__ / __str__` 代理（doc 22 §7.3.4 最后一行）
-  - 暴露 `session` 属性透传真实 `Session`（doc 22 §5.1.3）
-  - 暴露 `_query`（下划线开头）用于极少数需要拿到底层 Query 的兼容点
-- [ ] **2.2** 在 `hybrid_query.py` 内实现**显式禁用** `__iter__ / __getitem__ / __bool__`（doc 22 §7.3.4）
-  - `__iter__`：在 async 上下文抛 `RuntimeError("在 async 中请用 await query.all()")`，在同步上下文透传；测试同步 `for x in User.query: ...` 仍可用
-  - `__getitem__`：同上处理切片
-  - `__bool__`：抛异常并引导使用 `await query.count() > 0`
-- [ ] **2.3** 写 `tests/test_orm/unit/test_hybrid_query_chain.py`（新建）
-  - 链式透传：`User.query.filter_by(...).order_by(...).options(...)` 返回 HybridQuery
-  - repr 代理：`repr(q)` 包含 SELECT 语句
-  - 同步 `for` / 切片 / `bool`：同步上下文下行为与原 `Query` 一致
-  - async 上下文下 `for` / 切片 / `bool` 抛明确异常
-- [ ] **2.4** 本 Phase **不接入** `CoreModel.query`，仅作为独立类单测通过
+**决策锁定（Phase 2 专属）**：
+- **Q1 = Q（宽松）**：隐式终端 `__iter__ / __getitem__ / __bool__` —— 同步上下文透传 SA Query 行为（100% 等价），async 上下文抛 `SynchronousOnlyOperation`。与 Phase 3.3 主方案 A（上下文感知）哲学一致
+- **Q2 = Y（带泛型）**：`HybridQuery[T]` 与 `_HybridTerminal[T]` 均 `Generic[T]`，IDE / mypy 友好
 
-**Phase 2 验收**：`hybrid_query.py` + unit 测试通过；`CoreModel.query` 仍是旧的 `AsyncSafeQueryProperty`，生产路径零影响，可随时回滚（删文件即可）。
+- [x] **2.1** 新建 [`yweb-core/yweb/orm/hybrid_query.py`](../../yweb/orm/hybrid_query.py)
+  - `HybridQuery[T]`（链式代理）：`__init__(query)`；`__getattr__` 透传 SA Query；返回值若是 `Query` 再包一层 `HybridQuery`，否则原样返回
+  - `__repr__ / __str__` 代理
+  - `session` 显式 `@property` 透传真实 `Session`（`core_model.py` 15+ 处依赖此契约）
+  - `_query`（`__slots__` 单槽）暴露底层 SA Query
+- [x] **2.2** 隐式终端 `__iter__ / __getitem__ / __bool__`（Q 方案）
+  - 同步透传：`iter(self._query)` / `self._query[item]` / `bool(self._query)`
+  - async 抛 `SynchronousOnlyOperation`，错误消息含显式引导（`await q.all()` / `await q.count() > 0` / `await q.limit(...).offset(...).all()`）
+  - 尊重 `allow_sync()` 的 `_bypass` 与 `YWEB_ASYNC_SAFETY=off` —— 新增 `async_safety.is_in_async_context()` 只判断不抛错的 helper 供复用
+- [x] **2.3** 新建 [`tests/test_orm/unit/test_hybrid_query_chain.py`](../../tests/test_orm/unit/test_hybrid_query_chain.py) —— 17 测试全绿
+  - 代理链（Mock）：`filter_by → order_by → limit` 每步 HybridQuery；最末 `_query` 是链尾真 Query；非 Query 返回值不包；非 callable 属性原样透传
+  - `session`（真实 Session）：`hq.session is real_session`
+  - 同步隐式终端（真实 SA Query + SQLite in-memory）：`for/index/slice` 正常；`bool` 与 `bool(sa_query)` 等价（SA 不定义 `__bool__`，一律 truthy —— 契约是"同步透传"非"语义重写"）
+  - async 隐式终端：三种均抛 `SynchronousOnlyOperation`，错误消息含对应引导
+  - `allow_sync()` 兜底：async 内 `with allow_sync():` 后 `bool(hq)` 不抛错
+  - `YWEB_ASYNC_SAFETY=off`：async 内 `list(hq)` 正常返回
+  - 边界：`hq.this_method_does_not_exist_...` 抛 `AttributeError`（避免 `_query` 递归）
+  - `_HybridTerminal(thunk)` 可构造；`__await__` / `_run_sync` 留给 Phase 3
+- [x] **2.4** 本 Phase 不接入 `CoreModel.query` / `yweb/orm/__init__.py`（Phase 4 再做）
+
+**Phase 2 验收**：`hybrid_query.py` + 17 条 unit 测试 ✅；`test_async_safety.py` 17 条回归 ✅；`CoreModel.query` 仍是旧的 `AsyncSafeQueryProperty`，生产路径零影响，可随时回滚（删文件即可）。
 
 ---
 
@@ -367,3 +374,4 @@ Phase 0 → Phase 1 → Phase 2 → ... → Phase 7
 | 2026-04-21 | 执行 Phase 8.6：`README_DEV.md` 追加 `run_db → async_db_call` 迁移说明 + HybridQuery 预告；根 `README.md` 新增「异步路由」小节（零 async 指引的盲点补齐） |
 | 2026-04-21 | 执行 Phase 8.7 文档部分：写入 `assets/upstream_rundb_migration.md` 迁移指南模板（三步流程 + A/B/C 三种改法 + 4 条常见坑），y-sso-system 实施部分待进入上游仓后填充 |
 | 2026-04-21 | 锁定 Phase 3.3 决策：A（上下文感知）+ A2（async 忘 await 返回 terminal 对象让错误显形）；不暴露公开 `.value()` / `.result()`；写终端与读终端同策略。同步收口 22 号文档 §5.1.2 最后一句 |
+| 2026-04-21 | 执行 Phase 2 — HybridQuery 骨架：新增 `yweb/orm/hybrid_query.py`（`HybridQuery[T]` 链式代理 + `_HybridTerminal[T]` 占位）；`yweb/orm/async_safety.py` 追加 `is_in_async_context()` helper；新增 17 条单测（代理链 / session 透传 / 同步透传 / async 抛错 / allow_sync 兜底 / off 模式 / 边界）全绿。决策：Q1=Q（宽松，同步透传 async 抛错）、Q2=Y（带泛型）。不接入 CoreModel.query（留给 Phase 4） |

@@ -37,6 +37,7 @@ from contextvars import ContextVar
 __all__ = [
     'SynchronousOnlyOperation',
     'check_async_safety',
+    'is_in_async_context',
     'allow_sync',
     'AsyncSafeQueryProperty',
 ]
@@ -148,6 +149,27 @@ def check_async_safety():
             "检测到在 async 上下文中直接调用同步数据库操作！\n\n"
             + _FIX_GUIDANCE
         )
+
+
+def is_in_async_context() -> bool:
+    """判断当前是否在事件循环线程中（不抛错、不发警告）。
+
+    与 :func:`check_async_safety` 不同，此函数仅返回布尔值，
+    供需要自定义错误消息的调用方（如 HybridQuery 隐式终端）使用。
+
+    同样尊重 ``YWEB_ASYNC_SAFETY=off`` 与 :func:`allow_sync` 的 bypass。
+    """
+    if _mode == "off":
+        return False
+
+    if _bypass.get():
+        return False
+
+    try:
+        asyncio.get_running_loop()
+        return True
+    except RuntimeError:
+        return False
 
 
 class AsyncSafeQueryProperty:
