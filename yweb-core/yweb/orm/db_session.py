@@ -11,7 +11,8 @@
 - db_session_scope(): 非 HTTP 场景的上下文管理器
 - with_db_session(): 装饰器方式管理 session
 - on_request_end(): 请求结束清理
-- run_db(): 在 async def 路由中安全执行同步 DB 操作
+- async_db_call(): 在 async def 路由中安全执行同步 DB 操作（线程池桥接）
+- run_db(): [DEPRECATED] async_db_call 的旧别名，将在未来版本移除
 
 异步路由使用指南:
 
@@ -24,11 +25,11 @@
         def get_users(db: Session = Depends(get_db)):
             return User.query.all()
 
-    方式2 —— 需要混合 async I/O 时，使用 run_db()::
+    方式2 —— 需要混合 async I/O 时，使用 async_db_call()::
 
         @app.get("/users")
         async def get_users():
-            users = await run_db(User.get_all)
+            users = await async_db_call(User.get_all)
             extra = await some_async_http_call()
             return {"users": users, "extra": extra}
 
@@ -68,7 +69,8 @@ __all__ = [
     'with_db_session',
     'on_request_end',
     # 异步支持
-    'run_db',
+    'async_db_call',
+    'run_db',  # [DEPRECATED] kept as alias, emits DeprecationWarning
 ]
 
 
@@ -716,7 +718,7 @@ def with_db_session(
     return decorator
 
 
-async def run_db(func: Callable[..., T], *args, **kwargs) -> T:
+async def async_db_call(func: Callable[..., T], *args, **kwargs) -> T:
     """在线程池中执行同步数据库操作，避免阻塞事件循环
 
     当你需要在 async def 路由中调用同步的 ORM 操作时使用此函数。
@@ -736,26 +738,48 @@ async def run_db(func: Callable[..., T], *args, **kwargs) -> T:
 
     使用示例::
 
-        from yweb.orm import run_db
+        from yweb.orm import async_db_call
 
         @app.get("/users")
         async def get_users():
-            users = await run_db(User.get_all)
+            users = await async_db_call(User.get_all)
             return users
 
         @app.get("/user/{user_id}")
         async def get_user(user_id: int):
-            user = await run_db(User.get, user_id)
+            user = await async_db_call(User.get, user_id)
             extra = await some_async_http_call(user.id)
             return {"user": user.to_dict(), "extra": extra}
 
         # 也支持 lambda 包裹更复杂的查询
         @app.get("/active-users")
         async def get_active_users():
-            users = await run_db(
+            users = await async_db_call(
                 lambda: User.query.filter_by(is_active=True).all()
             )
             return [u.to_dict() for u in users]
     """
     from starlette.concurrency import run_in_threadpool
     return await run_in_threadpool(func, *args, **kwargs)
+
+
+async def run_db(func: Callable[..., T], *args, **kwargs) -> T:
+    """[DEPRECATED] async_db_call 的旧名称，保留一个发布周期以兼容存量代码。
+
+    新代码请使用 ``async_db_call``，语义完全一致：
+
+        # 旧
+        await run_db(User.get_all)
+        # 新
+        await async_db_call(User.get_all)
+
+    调用时会发出 ``DeprecationWarning``，未来版本将删除此别名。
+    """
+    import warnings
+    warnings.warn(
+        "yweb.orm.run_db 已弃用，请使用 async_db_call 代替；"
+        "run_db 将在未来版本中移除。",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return await async_db_call(func, *args, **kwargs)

@@ -10,7 +10,7 @@
 
     各场景的检测结果：
     - def 路由（FastAPI 自动放线程池）  → 放行
-    - async def + run_db()（线程池）    → 放行
+    - async def + async_db_call()（线程池）→ 放行
     - async def 直接调 ORM              → 拦截
     - async def + allow_sync()          → 放行（如 lifespan 启动初始化）
     - 脚本 / 测试 / 定时任务            → 放行
@@ -63,17 +63,17 @@ _FIX_GUIDANCE = """
       def get_users():                    # ← 去掉 async
           return User.query.all()
 
-  方式2 —— 保持 async def，用 run_db() 包装同步调用:
+  方式2 —— 保持 async def，用 async_db_call() 包装同步调用:
 
-      from yweb.orm import run_db
+      from yweb.orm import async_db_call
 
       @router.get("/users")
       async def get_users():
-          users = await run_db(User.get_all)  # ← 包装同步调用
+          users = await async_db_call(User.get_all)  # ← 包装同步调用
           return users
 
       # 也支持 lambda 包裹复杂查询
-      users = await run_db(
+      users = await async_db_call(
           lambda: User.query.filter_by(is_active=True).all()
       )
 
@@ -107,7 +107,7 @@ def allow_sync():
 
     .. warning::
         不要在请求处理路由中使用此上下文管理器，
-        那里应该使用 ``def`` 路由或 ``run_db()``。
+        那里应该使用 ``def`` 路由或 ``async_db_call()``。
     """
     token = _bypass.set(True)
     try:
@@ -139,7 +139,7 @@ def check_async_safety():
     if _mode == "warn":
         warnings.warn(
             "检测到在 async 上下文中直接调用同步数据库操作，"
-            "这会阻塞事件循环。请使用 def 路由或 run_db() 包装。",
+            "这会阻塞事件循环。请使用 def 路由或 async_db_call() 包装。",
             RuntimeWarning,
             stacklevel=3,
         )

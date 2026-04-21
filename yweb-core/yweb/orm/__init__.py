@@ -29,12 +29,12 @@
     def get_users(db: Session = Depends(get_db)):
         return User.query.all()
     
-    # 混合 async I/O 时使用 run_db()
-    from yweb.orm import run_db
+    # 混合 async I/O 时使用 async_db_call()
+    from yweb.orm import async_db_call
     
     @app.get("/users")
     async def get_users():
-        users = await run_db(User.get_all)
+        users = await async_db_call(User.get_all)
         extra = await some_async_call()
         return {"users": users, "extra": extra}
 
@@ -67,7 +67,8 @@ from .db_session import (
     db_session_scope,
     with_db_session,
     # 异步支持
-    run_db,
+    async_db_call,
+    run_db,  # [DEPRECATED] alias of async_db_call
 )
 
 # 异步安全检测
@@ -264,7 +265,8 @@ __all__ = [
     "with_db_session",
     
     # Async Support
-    "run_db",
+    "async_db_call",
+    "run_db",  # [DEPRECATED] alias of async_db_call
     "SynchronousOnlyOperation",
     "check_async_safety",
     "allow_sync",

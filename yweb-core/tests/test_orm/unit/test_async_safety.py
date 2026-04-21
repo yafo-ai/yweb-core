@@ -6,9 +6,9 @@
 
   单元测试（检测逻辑）:
     1. async 上下文检测 → 抛出 SynchronousOnlyOperation
-    2. 错误信息包含修复指导（def 路由 + run_db 两种方式）
+    2. 错误信息包含修复指导（def 路由 + async_db_call 两种方式）
     3. 同步上下文 → 正常放行
-    4. run_db() 包装 → 正常放行
+    4. async_db_call() 包装 → 正常放行
     5. YWEB_ASYNC_SAFETY=off → 禁用检测
     6. YWEB_ASYNC_SAFETY=warn → 警告但不报错
     7. 异常类型继承关系
@@ -16,10 +16,10 @@
   FastAPI 集成测试:
     8.  async def 路由直接调 ORM → 500
     9.  def 路由调 ORM → 200
-    10. async def + run_db() → 200
-    11. run_db 内完整 CRUD（增删改查）→ 数据正确
-    12. run_db 内嵌套 ORM 调用（model.save() 等）→ 不误报
-    13. 同一请求内多次 run_db 共享 Session → 数据一致
+    10. async def + async_db_call() → 200
+    11. async_db_call 内完整 CRUD（增删改查）→ 数据正确
+    12. async_db_call 内嵌套 ORM 调用（model.save() 等）→ 不误报
+    13. 同一请求内多次 async_db_call 共享 Session → 数据一致
 """
 
 import asyncio
@@ -38,7 +38,7 @@ from yweb.orm import (
     db_manager,
     init_database,
     on_request_end,
-    run_db,
+    async_db_call,
     SynchronousOnlyOperation,
     check_async_safety,
 )
@@ -100,8 +100,8 @@ class TestAsyncSafetyDetection:
         msg = str(exc_info.value)
         assert "def" in msg
 
-    def test_error_message_suggests_run_db(self):
-        """错误信息应包含"方式2：run_db()"的修复指导"""
+    def test_error_message_suggests_async_db_call(self):
+        """错误信息应包含"方式2：async_db_call()"的修复指导"""
         async def _run():
             check_async_safety()
 
@@ -109,12 +109,12 @@ class TestAsyncSafetyDetection:
             asyncio.run(_run())
 
         msg = str(exc_info.value)
-        assert "run_db" in msg
+        assert "async_db_call" in msg
 
-    def test_run_db_bypasses_detection(self):
-        """通过 run_db() 包装后的调用应安全通过检测（在线程池执行）"""
+    def test_async_db_call_bypasses_detection(self):
+        """通过 async_db_call() 包装后的调用应安全通过检测（在线程池执行）"""
         async def _run():
-            await run_db(check_async_safety)
+            await async_db_call(check_async_safety)
 
         asyncio.run(_run())
 
@@ -175,8 +175,8 @@ class TestAsyncSafetyFastAPIIntegration:
 
         @app.get("/async-users-safe")
         async def get_users_async_safe():
-            """async def + run_db() → 应正常工作"""
-            users = await run_db(
+            """async def + async_db_call() → 应正常工作"""
+            users = await async_db_call(
                 lambda: AsyncTestUser.query.filter_by(name="Alice").all()
             )
             return {"count": len(users)}
@@ -205,18 +205,18 @@ class TestAsyncSafetyFastAPIIntegration:
         data = resp.json()
         assert data["count"] >= 0
 
-    def test_async_route_with_run_db_returns_200(self):
-        """async def + run_db() 调用 ORM 应正常返回 200"""
+    def test_async_route_with_async_db_call_returns_200(self):
+        """async def + async_db_call() 调用 ORM 应正常返回 200"""
         resp = self.client.get("/async-users-safe")
         assert resp.status_code == 200
         data = resp.json()
         assert data["count"] >= 0
 
 
-# ==================== run_db 完整功能测试 ====================
+# ==================== async_db_call 完整功能测试 ====================
 
 class TestRunDbCRUDAndSessionSharing:
-    """验证 run_db 包装下的完整 CRUD 操作、嵌套调用、Session 共享"""
+    """验证 async_db_call 包装下的完整 CRUD 操作、嵌套调用、Session 共享"""
 
     @pytest.fixture(autouse=True)
     def setup(self):
@@ -230,8 +230,8 @@ class TestRunDbCRUDAndSessionSharing:
         app.add_middleware(RequestIDMiddleware)
 
         @app.post("/run-db-crud")
-        async def run_db_crud():
-            """run_db 内完整 CRUD 测试"""
+        async def async_db_call_crud():
+            """async_db_call 内完整 CRUD 测试"""
 
             def do_crud():
                 # Create
@@ -258,11 +258,11 @@ class TestRunDbCRUDAndSessionSharing:
                     "deleted_is_none": deleted is None,
                 }
 
-            return await run_db(do_crud)
+            return await async_db_call(do_crud)
 
         @app.post("/run-db-nested")
-        async def run_db_nested():
-            """run_db 内嵌套多步 ORM 操作（模拟 Service 层）"""
+        async def async_db_call_nested():
+            """async_db_call 内嵌套多步 ORM 操作（模拟 Service 层）"""
 
             def service_create_user_with_update():
                 user = AsyncTestUser(name="Nested", email="v1@test.com")
@@ -275,19 +275,19 @@ class TestRunDbCRUDAndSessionSharing:
                     "email": refreshed.email,
                 }
 
-            result = await run_db(service_create_user_with_update)
+            result = await async_db_call(service_create_user_with_update)
             return result
 
         @app.get("/run-db-session-sharing")
-        async def run_db_session_sharing():
-            """多次 run_db 调用共享同一 Session（同一 request_id）"""
+        async def async_db_call_session_sharing():
+            """多次 async_db_call 调用共享同一 Session（同一 request_id）"""
 
-            user = await run_db(lambda: AsyncTestUser(
+            user = await async_db_call(lambda: AsyncTestUser(
                 name="Shared", email="shared@test.com"
             ))
-            await run_db(lambda: user.save(commit=True))
+            await async_db_call(lambda: user.save(commit=True))
 
-            found = await run_db(
+            found = await async_db_call(
                 lambda: AsyncTestUser.query.filter_by(name="Shared").first()
             )
 
@@ -301,8 +301,8 @@ class TestRunDbCRUDAndSessionSharing:
         yield
         on_request_end()
 
-    def test_run_db_crud_operations(self):
-        """run_db 包装下的增删改查应全部正确执行"""
+    def test_async_db_call_crud_operations(self):
+        """async_db_call 包装下的增删改查应全部正确执行"""
         resp = self.client.post("/run-db-crud")
         assert resp.status_code == 200
         data = resp.json()
@@ -310,8 +310,8 @@ class TestRunDbCRUDAndSessionSharing:
         assert data["updated_email"] == "bob_new@test.com"
         assert data["deleted_is_none"] is True
 
-    def test_run_db_nested_orm_calls(self):
-        """run_db 内嵌套的多步 ORM 操作（save + update + get）不应误报"""
+    def test_async_db_call_nested_orm_calls(self):
+        """async_db_call 内嵌套的多步 ORM 操作（save + update + get）不应误报"""
         resp = self.client.post("/run-db-nested")
         assert resp.status_code == 200
         data = resp.json()
@@ -319,11 +319,49 @@ class TestRunDbCRUDAndSessionSharing:
         assert data["email"] == "v2@test.com"
         assert data["id"] is not None
 
-    def test_multiple_run_db_calls_share_session(self):
-        """同一请求内多次 run_db 调用应能看到彼此的数据变更"""
+    def test_multiple_async_db_call_calls_share_session(self):
+        """同一请求内多次 async_db_call 调用应能看到彼此的数据变更"""
         resp = self.client.get("/run-db-session-sharing")
         assert resp.status_code == 200
         data = resp.json()
         assert data["same_record"] is True
         assert data["created_id"] is not None
         assert data["created_id"] == data["found_id"]
+
+
+# ==================== 旧别名 run_db 向后兼容测试 ====================
+
+class TestRunDbDeprecatedAlias:
+    """验证旧名 run_db 作为 deprecated alias 仍可用，但会发出 DeprecationWarning。
+
+    D5 决策保留一个发布周期的向后兼容，之后可移除。
+    """
+
+    def test_run_db_alias_still_works(self):
+        """run_db(func) 应和 async_db_call(func) 行为一致"""
+        from yweb.orm import run_db
+
+        async def _run():
+            # 抑制本用例里我们不关心的 DeprecationWarning，只验证行为
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)
+                return await run_db(lambda: 42)
+
+        assert asyncio.run(_run()) == 42
+
+    def test_run_db_alias_emits_deprecation_warning(self):
+        """调用 run_db() 应发出 DeprecationWarning，提示迁移到 async_db_call"""
+        from yweb.orm import run_db
+
+        async def _run():
+            return await run_db(lambda: "ok")
+
+        with pytest.warns(DeprecationWarning, match="async_db_call"):
+            result = asyncio.run(_run())
+        assert result == "ok"
+
+    def test_run_db_alias_identity_is_separate_function(self):
+        """run_db 和 async_db_call 是两个独立函数（alias 负责发 warning 后转发）"""
+        from yweb.orm import run_db
+        assert run_db is not async_db_call
