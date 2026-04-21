@@ -142,23 +142,24 @@ Phase 0 → Phase 1 → Phase 2 → ... → Phase 7
 
 ---
 
-## Phase 3 — 终端方法与 await 支持
+## Phase 3 — 终端方法与 await 支持  ✅ 2026-04-21 完成
 
-- [ ] **3.1** 设计 `_HybridTerminal`（一次性终端对象）
-  - 职责：封装「待执行的 sync 调用」；实现 `__await__`（走 `run_in_threadpool`）+ 同步入口（`_run_sync()`）
-  - 一次性：内部布尔 `_consumed`；第二次 `__await__` / `_run_sync` 抛 `RuntimeError("HybridQuery terminal already consumed")`（doc 22 §7.3.9）
-- [ ] **3.2** 在 `HybridQuery` 上实现以下终端方法（每个方法返回 `_HybridTerminal`，或在同步上下文直接求值）：
-  - [ ] `all`
-  - [ ] `first`
-  - [ ] `one`
-  - [ ] `one_or_none`
-  - [ ] `scalar`
-  - [ ] `scalars`（若 SA 版本暴露）
-  - [ ] `count`
-  - [ ] `get`（按主键；SA 2.0 已弱化但现网可能仍用）
-  - [ ] `delete`（`Query.delete()`，写终端）
-  - [ ] `update`（`Query.update()`，写终端）
-  - [ ] `paginate`（走 `CoreModel._add_paginate_to_query` 注入的方法；内部 `count + slice` 在**同一线程池回合**内完成，避免两次跳线程）
+- [x] **3.1** 设计 `_HybridTerminal`（一次性终端对象）
+  - `__await__` 走 `starlette.concurrency.run_in_threadpool`
+  - `_run_sync()` 下划线内部同步入口（不是公开 API）
+  - 一次性：`_consumed` + `_mark_consumed()`；二次 await 或 `_run_sync` 抛 `RuntimeError("HybridQuery terminal already consumed")`
+- [x] **3.2** 在 `HybridQuery` 上实现 10 个终端方法（复用 `_terminal(thunk)` helper，统一应用 Phase 3.3 A + A2 模板）：
+  - [x] `all` — `list[T]` / `_HybridTerminal[list[T]]`
+  - [x] `first` — `T | None`
+  - [x] `one` — `T`（异常语义沿用 SA：`NoResultFound` / `MultipleResultsFound`）
+  - [x] `one_or_none` — `T | None`
+  - [x] `scalar` — `Any`
+  - [~] `scalars` — **未实现**（SA 2.0 `Query` 对象未暴露 `.scalars()`；仓内 0 处使用，延后到确实有需求时再加）
+  - [x] `count` — `int`
+  - [x] `get(ident)` — 按主键（docstring 注明 SA 2.0 deprecated）
+  - [x] `delete(synchronize_session='auto')` — 写终端，返回影响行数
+  - [x] `update(values, synchronize_session='auto')` — 写终端
+  - [x] `paginate(page, page_size, max_page_size, schema)` — 走 `CoreModel._add_paginate_to_query` 注入方法；单次 thunk 内完成 count + offset/limit.all()，同一线程池回合执行
 - [x] **3.3** 同步 / 异步双面  ✅ 2026-04-21 决策锁定
   - **主方案 = A（上下文感知）**：终端方法在同步上下文立即求值返回原生结果（`list` / Model / `int` / `Page`）；在 async 上下文返回 `_HybridTerminal`（可 `await`）
   - **async 忘 await 策略 = A2**：async 中未 `await` 的用户拿到的是 `_HybridTerminal` 对象，下一行操作（迭代 / 索引 / 属性访问）自然触发 `TypeError`，**让错误显形**，避免 A1 式的静默阻塞事件循环
@@ -175,16 +176,19 @@ Phase 0 → Phase 1 → Phase 2 → ... → Phase 7
     ```
   - 对 Phase 2.2 的约束：`HybridQuery` 链式对象的 `__iter__` / `__getitem__` / `__bool__` 仍需禁用（doc 22 §7.3.4），与 A2 不冲突 —— A2 只管终端方法（`.all()` 等显式调用）的返回类型；链式对象的隐式终端禁用仍由 Phase 2.2 处理。二者组合后：同步链式 → 正常用；async 链式迭代 → Phase 2.2 抛异常；async 终端方法漏 `await` → A2 让 `TypeError` 显形
   - 决策记录：`[x] 最终方案 = A + A2（context-aware + return terminal on missing await）`
-- [ ] **3.4** 测试 `tests/test_orm/unit/test_hybrid_query_terminal.py`（新建）
-  - 每个终端方法：同步/异步两种路径各一个用例
-  - 一次性语义：二次 `await` 抛明确异常
-  - `paginate` 单独用例：分页参数 / 总数 / 列表长度
-- [ ] **3.5** 实现细节自检：
-  - [ ] `__await__` 内部通过 `starlette.concurrency.run_in_threadpool` 执行（不自己造 `run_in_executor`）
-  - [ ] 线程池回合内**只做单次**「构建好的 sync Query 的一次执行」，不触发额外关系访问（doc 22 §7.3.1）
-  - [ ] 不做 `session.commit()`（doc 22 §7.3.6）
+- [x] **3.4** 测试 [`tests/test_orm/unit/test_hybrid_query_terminal.py`](../../tests/test_orm/unit/test_hybrid_query_terminal.py) —— 30 cases 全绿
+  - `TestSyncTerminals`（12）：10 个终端同步返回原生结果 + `one/one_or_none` 异常分支 + `paginate` 第二页
+  - `TestAsyncTerminals`（10）：10 个终端 async 路径返回 `_HybridTerminal` 后 await 得正确结果
+  - `TestTerminalOneShot`（3）：二次 await / 二次 `_run_sync` / `await` 后再 `_run_sync` 均抛 `RuntimeError("already consumed")`；thunk 只执行一次
+  - `TestTerminalThreadpool`（1）：await 时 thunk 真的在非主线程执行（`threading.get_ident()` 验证）
+  - `TestAsyncBypassInTerminals`（2）：`allow_sync()` / `YWEB_ASYNC_SAFETY=off` 下 async 也走同步分支，终端直接返回原生结果
+  - `TestA2MissingAwait`（2）：async 忘 `await`，下一步迭代 / 算术操作抛 `TypeError`（让错误显形）
+- [x] **3.5** 实现细节自检
+  - [x] `__await__` 内部通过 `starlette.concurrency.run_in_threadpool` 执行（与 `async_db_call` 同栈）
+  - [x] 每个终端只调用一次 `self._query.xxx()`，thunk 内不访问关系属性；`paginate` 的 count + slice 在同一 thunk 完成
+  - [x] 不做 `session.commit()`（写终端返回行数交由调用方 `commit`，与 SA 原生 `Query.delete/update` 一致）
 
-**Phase 3 验收**：`hybrid_query.py` 单元测试 100% 通过；`paginate` 与 `async_db_call` 结果完全一致；一次性语义有测试兜底。
+**Phase 3 验收**：30 条单测 100% 通过；回归 Phase 2（17）+ async_safety（17）全绿；写终端行为与 SA 原生一致；一次性语义有测试兜底。
 
 ---
 
@@ -375,3 +379,4 @@ Phase 0 → Phase 1 → Phase 2 → ... → Phase 7
 | 2026-04-21 | 执行 Phase 8.7 文档部分：写入 `assets/upstream_rundb_migration.md` 迁移指南模板（三步流程 + A/B/C 三种改法 + 4 条常见坑），y-sso-system 实施部分待进入上游仓后填充 |
 | 2026-04-21 | 锁定 Phase 3.3 决策：A（上下文感知）+ A2（async 忘 await 返回 terminal 对象让错误显形）；不暴露公开 `.value()` / `.result()`；写终端与读终端同策略。同步收口 22 号文档 §5.1.2 最后一句 |
 | 2026-04-21 | 执行 Phase 2 — HybridQuery 骨架：新增 `yweb/orm/hybrid_query.py`（`HybridQuery[T]` 链式代理 + `_HybridTerminal[T]` 占位）；`yweb/orm/async_safety.py` 追加 `is_in_async_context()` helper；新增 17 条单测（代理链 / session 透传 / 同步透传 / async 抛错 / allow_sync 兜底 / off 模式 / 边界）全绿。决策：Q1=Q（宽松，同步透传 async 抛错）、Q2=Y（带泛型）。不接入 CoreModel.query（留给 Phase 4） |
+| 2026-04-21 | 执行 Phase 3 — HybridQuery 终端方法：`_HybridTerminal` 实装 `__await__`（`run_in_threadpool`）/ `_run_sync()` / `_consumed` 一次性保护；`HybridQuery` 上追加 10 个终端方法（`all/first/one/one_or_none/scalar/count/get/delete/update/paginate`），统一走 `_terminal()` helper 应用 A + A2 模板；新增 30 条单测（同步 12 + async 10 + 一次性 3 + 线程池 1 + bypass 2 + A2 漏 await 2）全绿。`scalars` 未实现（SA 2.0 Query 未暴露 + 仓内 0 处使用） |

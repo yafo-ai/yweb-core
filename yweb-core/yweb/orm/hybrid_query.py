@@ -1,33 +1,32 @@
 """HybridQuery —— 同步/异步双模查询代理
 
-Phase 2（本次交付）：仅链式代理骨架，不发 SQL
+设计范围（Phase 2 + Phase 3）
 =================================================
 
-- ``HybridQuery[T]``：包装 SQLAlchemy 的 ``Query``，将其所有链式方法
-  （``filter`` / ``order_by`` / ``limit`` 等）透明代理，返回值若仍是
-  ``Query``，再包一层 ``HybridQuery`` 以支持链式语法。
-- ``session`` 属性直接透传真实 :class:`sqlalchemy.orm.Session`，保障
-  ``CoreModel`` 内 ``cls.query.session.execute(...)`` 等调用不受影响。
-- 隐式终端 ``__iter__`` / ``__getitem__`` / ``__bool__`` 采用
-  **上下文感知** 策略（与 23 号清单 Phase 3.3 决策 A 一致）：
+Phase 2（已交付）：链式代理骨架
+    - ``HybridQuery[T]`` 透明代理 SA ``Query``，链式方法返回 HybridQuery
+    - ``session`` 透传真实 ``Session``
+    - 隐式终端 ``__iter__`` / ``__getitem__`` / ``__bool__`` —— 同步透传、async 抛错
 
-  * 同步上下文：透传给 SA ``Query``，行为保持 100% 等价；
-  * async 上下文：抛出 :class:`SynchronousOnlyOperation`，错误消息中
-    提示改用 ``await q.all()`` / ``await q.count() > 0`` 等显式终端。
+Phase 3（本次交付）：终端方法与 await 支持
+    - ``_HybridTerminal[U]`` 实装 ``__await__``（走 ``starlette.concurrency.run_in_threadpool``）
+      + ``_run_sync()`` 内部同步入口 + 一次性消费保护（``_consumed``）
+    - ``HybridQuery`` 上 10 个终端方法：``all`` / ``first`` / ``one`` / ``one_or_none`` /
+      ``scalar`` / ``count`` / ``get`` / ``delete`` / ``update`` / ``paginate``
+    - 所有终端统一走 ``_terminal()`` helper，遵循 Phase 3.3 决策 A + A2：
+      * 同步上下文 → 立即求值返回原生结果
+      * async 上下文 → 返回 ``_HybridTerminal``；未 ``await`` 则下一行操作触发 ``TypeError``
 
-- ``_HybridTerminal[T]`` 仅放最小壳子，``__await__`` 与 ``_run_sync()``
-  将在 Phase 3（终端方法）实装。
-
-- **本 Phase 不接入** ``CoreModel.query`` —— 等 Phase 4 才替换 ``query_property``。
+Phase 4（未开始）：接入 ``CoreModel.query`` —— 当前仍是 ``AsyncSafeQueryProperty``。
 
 相关文档:
-    - docs/orm_docs/22_hybrid_query_sync_async_refactor.md
-    - docs/orm_docs/23_hybrid_query_execution_checklist.md
+    - docs/orm_docs/22_hybrid_query_sync_async_refactor.md §5.1 / §7.3
+    - docs/orm_docs/23_hybrid_query_execution_checklist.md Phase 2 / Phase 3
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Generator, Generic, TypeVar, Union
 
 from .async_safety import SynchronousOnlyOperation, is_in_async_context
 
@@ -40,35 +39,65 @@ __all__ = [
 ]
 
 T = TypeVar("T")
+U = TypeVar("U")
 
 
 class _HybridTerminal(Generic[T]):
-    """终端结果占位对象（Phase 3 实装 ``__await__`` 与 ``_run_sync()``）
+    """终端结果对象 —— 一次性 awaitable
 
-    Phase 2 只提供最小壳子，方便 ``hybrid_query.py`` 与测试用例
-    import 时符号可用；Phase 3 将补上实际的同步求值与可 await 语义。
+    承载一个"待执行的同步调用"（``thunk``），对外提供两种消费方式：
+
+    1. ``await terminal`` —— 在 async 上下文下通过
+       :func:`starlette.concurrency.run_in_threadpool` 移交到 AnyIO 线程池
+       执行，不阻塞事件循环；
+    2. ``terminal._run_sync()`` —— 下划线内部 escape hatch，直接同步调用，
+       **不是公开 API**，仅供框架内部少量兼容点使用（Phase 3.3 决策：不对
+       外暴露 ``.value()`` / ``.result()`` 避免与"同步直接调用"造成双写法）。
+
+    **一次性语义**（doc 22 §7.3.9）：同一对象只能消费一次，第二次 await
+    或 ``_run_sync()`` 均抛 :class:`RuntimeError`；避免复用 terminal 导致
+    重复执行 SQL 的隐式副作用。
     """
 
-    __slots__ = ("_thunk",)
+    __slots__ = ("_thunk", "_consumed")
 
     def __init__(self, thunk: Callable[[], T]) -> None:
         self._thunk = thunk
+        self._consumed = False
+
+    def __await__(self) -> Generator[Any, None, T]:
+        self._mark_consumed()
+        from starlette.concurrency import run_in_threadpool
+
+        return run_in_threadpool(self._thunk).__await__()
+
+    def _run_sync(self) -> T:
+        """同步执行 thunk（内部 escape hatch，不是公开 API）"""
+        self._mark_consumed()
+        return self._thunk()
+
+    def _mark_consumed(self) -> None:
+        if self._consumed:
+            raise RuntimeError(
+                "HybridQuery terminal already consumed. "
+                "终端对象只能消费一次；如需再次查询请重新构建 query。"
+            )
+        self._consumed = True
 
 
 class HybridQuery(Generic[T]):
     """同步/异步双模查询代理
 
-    包装 SQLAlchemy 的 ``Query``，Phase 2 仅透传链式方法与隐式终端。
-    终端方法（``all`` / ``first`` / ``count`` / ``delete`` / ``update`` 等）
-    在 Phase 3 单独实现。
+    包装 SQLAlchemy 的 ``Query``，同步上下文下行为 100% 贴近原生；
+    async 上下文下将终端求值移交线程池，避免阻塞事件循环。
 
     用法（Phase 4 接入 ``CoreModel.query`` 后）::
 
         # 同步上下文（def 路由、脚本、测试）
-        users = User.query.filter_by(is_active=True).all()   # 原样工作
+        users = User.query.filter_by(is_active=True).all()
 
         # async 上下文（async def 路由）
-        users = await User.query.filter_by(is_active=True).all()  # 返回 awaitable
+        users = await User.query.filter_by(is_active=True).all()
     """
 
     __slots__ = ("_query",)
@@ -131,3 +160,77 @@ class HybridQuery(Generic[T]):
                 "请改用:  exists = await query.count() > 0"
             )
         return bool(self._query)
+
+    def _terminal(self, thunk: Callable[[], U]) -> "Union[U, _HybridTerminal[U]]":
+        """终端方法统一入口（Phase 3.3 决策 A）
+
+        - 同步上下文：立即调用 thunk 返回原生结果；
+        - async 上下文：返回 :class:`_HybridTerminal`，供 ``await`` 消费。
+
+        尊重 ``allow_sync()`` 与 ``YWEB_ASYNC_SAFETY=off``（通过
+        :func:`is_in_async_context` 内部判断）。
+        """
+        if is_in_async_context():
+            return _HybridTerminal(thunk)
+        return thunk()
+
+    def all(self) -> "Union[list[T], _HybridTerminal[list[T]]]":
+        return self._terminal(lambda: self._query.all())
+
+    def first(self) -> "Union[T | None, _HybridTerminal[T | None]]":
+        return self._terminal(lambda: self._query.first())
+
+    def one(self) -> "Union[T, _HybridTerminal[T]]":
+        return self._terminal(lambda: self._query.one())
+
+    def one_or_none(self) -> "Union[T | None, _HybridTerminal[T | None]]":
+        return self._terminal(lambda: self._query.one_or_none())
+
+    def scalar(self) -> "Union[Any, _HybridTerminal[Any]]":
+        return self._terminal(lambda: self._query.scalar())
+
+    def count(self) -> "Union[int, _HybridTerminal[int]]":
+        return self._terminal(lambda: self._query.count())
+
+    def get(self, ident: Any) -> "Union[T | None, _HybridTerminal[T | None]]":
+        """按主键取（SA 2.0 已 deprecate，仅为向后兼容保留）"""
+        return self._terminal(lambda: self._query.get(ident))
+
+    def delete(self, synchronize_session: Any = "auto") -> "Union[int, _HybridTerminal[int]]":
+        """批量删除，返回影响行数（写终端）"""
+        return self._terminal(
+            lambda: self._query.delete(synchronize_session=synchronize_session)
+        )
+
+    def update(
+        self,
+        values: dict,
+        synchronize_session: Any = "auto",
+    ) -> "Union[int, _HybridTerminal[int]]":
+        """批量更新，返回影响行数（写终端）"""
+        return self._terminal(
+            lambda: self._query.update(values, synchronize_session=synchronize_session)
+        )
+
+    def paginate(
+        self,
+        page: int = 1,
+        page_size: int = 10,
+        max_page_size: int = 100,
+        schema: Any = None,
+    ) -> Any:
+        """分页查询（走 ``CoreModel._add_paginate_to_query`` 注入的方法）
+
+        内部一次 thunk 内完成 count + offset/limit.all()，**同一线程池回合**
+        执行完毕，避免两次跳线程（doc 22 §7.3.1）。
+
+        返回 :class:`Page` 同步，或 ``_HybridTerminal[Page]`` 异步。
+        """
+        return self._terminal(
+            lambda: self._query.paginate(
+                page=page,
+                page_size=page_size,
+                max_page_size=max_page_size,
+                schema=schema,
+            )
+        )
