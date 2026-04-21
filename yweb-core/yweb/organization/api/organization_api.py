@@ -56,7 +56,7 @@ def create_organization_crud_router(
         summary="获取组织列表",
         description="获取所有组织，支持按状态筛选"
     )
-    async def list_organizations(
+    def list_organizations(
         is_active: Optional[bool] = Query(None, description="按状态筛选"),
         keyword: Optional[str] = Query(None, description="按名称/编码搜索"),
         page: int = Query(1, ge=1, description="页码"),
@@ -84,7 +84,7 @@ def create_organization_crud_router(
         summary="获取组织详情",
         description="根据组织ID获取详情"
     )
-    async def get_organization(
+    def get_organization(
         org_id: int = Query(..., description="组织ID"),
     ):
         """获取组织详情"""
@@ -105,7 +105,7 @@ def create_organization_crud_router(
         summary="创建组织",
         description="创建新的组织"
     )
-    async def create_organization(data: OrganizationCreate):
+    def create_organization(data: OrganizationCreate):
         """创建组织"""
         try:
             org = org_service.create_org(
@@ -128,7 +128,7 @@ def create_organization_crud_router(
         summary="更新组织",
         description="更新组织信息"
     )
-    async def update_organization(
+    def update_organization(
         data: OrganizationUpdate,
         org_id: int = Query(..., description="组织ID"),
     ):
@@ -146,7 +146,7 @@ def create_organization_crud_router(
         summary="删除组织",
         description="删除组织（软删除，级联删除策略会阻止存在部门/员工时删除）"
     )
-    async def delete_organization(
+    def delete_organization(
         org_id: int = Query(..., description="组织ID"),
         force: bool = Query(False, description="是否强制删除"),
     ):

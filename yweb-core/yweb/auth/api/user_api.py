@@ -109,7 +109,7 @@ def create_user_router(
     # ==================== 查询接口 ====================
 
     @router.get("/list", response_model=PageResponse[UserResponse], summary="搜索用户列表")
-    async def list_users(
+    def list_users(
         keyword: Optional[str] = Query(None, description="搜索关键词（用户名、姓名、邮箱、手机号）"),
         status: Optional[str] = Query(None, description="用户状态 (active, inactive)"),
         role: Optional[str] = Query(None, description="角色编码过滤（如 admin, user, external）"),
@@ -137,7 +137,7 @@ def create_user_router(
         return Resp.OK(UserResponse.from_page(page_result))
 
     @router.get("/get", response_model=ItemResponse[UserDetailResponse], summary="获取用户详情")
-    async def get_user(
+    def get_user(
         user_id: int = Query(..., description="用户ID"),
     ):
         """获取用户详情"""
@@ -149,7 +149,7 @@ def create_user_router(
     # ==================== 写入接口 ====================
 
     @router.post("/create", response_model=ItemResponse[UserResponse], summary="创建用户")
-    async def create_user(request: CreateUserRequest):
+    def create_user(request: CreateUserRequest):
         """创建用户（自动验证 + 密码哈希）"""
         try:
             user = user_model.create_user(
@@ -165,7 +165,7 @@ def create_user_router(
             return Resp.BadRequest(message=str(e))
 
     @router.post("/update", response_model=ItemResponse[UserResponse], summary="更新用户信息")
-    async def update_user(
+    def update_user(
         request: UpdateUserRequest,
         user_id: int = Query(..., description="用户ID"),
     ):
@@ -186,7 +186,7 @@ def create_user_router(
         return Resp.OK(UserResponse.from_entity(user), message="用户更新成功")
 
     @router.post("/enable", response_model=ItemResponse[UserResponse], summary="启用用户")
-    async def enable_user(
+    def enable_user(
         user_id: int = Query(..., description="用户ID"),
     ):
         """启用用户"""
@@ -199,7 +199,7 @@ def create_user_router(
         return Resp.OK(UserResponse.from_entity(user), message="用户启用成功")
 
     @router.post("/disable", response_model=ItemResponse[UserResponse], summary="禁用用户")
-    async def disable_user(
+    def disable_user(
         user_id: int = Query(..., description="用户ID"),
     ):
         """禁用用户"""
@@ -212,7 +212,7 @@ def create_user_router(
         return Resp.OK(UserResponse.from_entity(user), message="用户禁用成功")
 
     @router.post("/reset-password", response_model=OkResponse, summary="重置密码")
-    async def reset_password(
+    def reset_password(
         request: ResetPasswordRequest,
         user_id: int = Query(..., description="用户ID"),
     ):

@@ -51,7 +51,7 @@ def create_login_record_router(
     # ==================== 路由定义 ====================
 
     @router.get("/list", response_model=PageResponse[LoginRecordItem], summary="查询登录记录")
-    async def list_login_records(
+    def list_login_records(
         username: Optional[str] = Query(None, description="用户名，支持模糊查询"),
         ip_address: Optional[str] = Query(None, description="登录IP地址"),
         status: Optional[str] = Query(None, description="登录状态 (success, failed, pending)"),

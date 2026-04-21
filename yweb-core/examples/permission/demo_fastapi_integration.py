@@ -98,8 +98,8 @@ def mock_get_current_user(token: str = None) -> UserIdentity:
 # ==================== 初始化 ====================
 
 @app.on_event("startup")
-async def startup():
-    """应用启动时初始化"""
+def startup():
+    """应用启动时初始化（使用 def 避免在 async 上下文中调用同步 ORM）"""
     # 1. 初始化数据库（保存在脚本所在目录）
     import os
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -124,10 +124,10 @@ async def startup():
     )
     
     # 3. 初始化演示数据
-    await init_demo_data()
+    init_demo_data()
 
 
-async def init_demo_data():
+def init_demo_data():
     """初始化演示数据"""
     from yweb.permission.services import PermissionService, RoleService
     
@@ -184,7 +184,7 @@ async def init_demo_data():
 # ==================== API 路由 ====================
 
 @app.get("/")
-async def root():
+def root():
     """首页"""
     return {
         "message": "权限模块 FastAPI 集成演示",
@@ -212,7 +212,7 @@ USERS_DB = [
 
 
 @app.get("/users")
-async def list_users(token: str = None):
+def list_users(token: str = None):
     """用户列表 - 需要 user:list 权限"""
     user = mock_get_current_user(token)
     
@@ -231,7 +231,7 @@ async def list_users(token: str = None):
 
 
 @app.get("/users/{user_id}")
-async def get_user(user_id: int, token: str = None):
+def get_user(user_id: int, token: str = None):
     """用户详情 - 需要 user:read 权限"""
     user = mock_get_current_user(token)
     subject_id = f"{user.source}:{user.user_id}"
@@ -249,7 +249,7 @@ async def get_user(user_id: int, token: str = None):
 
 
 @app.delete("/users/{user_id}")
-async def delete_user(user_id: int, token: str = None):
+def delete_user(user_id: int, token: str = None):
     """删除用户 - 需要 admin 角色"""
     user = mock_get_current_user(token)
     subject_id = f"{user.source}:{user.user_id}"
@@ -267,7 +267,7 @@ async def delete_user(user_id: int, token: str = None):
 
 
 @app.get("/admin/config")
-async def get_config(token: str = None):
+def get_config(token: str = None):
     """系统配置 - 需要 admin:config 权限"""
     user = mock_get_current_user(token)
     subject_id = f"{user.source}:{user.user_id}"
@@ -287,7 +287,7 @@ async def get_config(token: str = None):
 
 
 @app.get("/my-permissions")
-async def my_permissions(token: str = None):
+def my_permissions(token: str = None):
     """查看当前用户的所有权限"""
     user = mock_get_current_user(token)
     subject_id = f"{user.source}:{user.user_id}"

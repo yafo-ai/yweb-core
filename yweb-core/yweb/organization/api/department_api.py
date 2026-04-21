@@ -126,7 +126,7 @@ def create_department_crud_router(
         summary="获取部门列表",
         description="获取指定组织下的部门列表（平铺）"
     )
-    async def list_departments(
+    def list_departments(
         org_id: int = Query(..., description="组织ID"),
         is_active: Optional[bool] = Query(None, description="按状态筛选"),
         page: int = Query(1, ge=1, description="页码"),
@@ -151,7 +151,7 @@ def create_department_crud_router(
         summary="获取部门树",
         description="获取指定组织的部门树形结构"
     )
-    async def get_department_tree(
+    def get_department_tree(
         org_id: int = Query(..., description="组织ID"),
         include: Optional[str] = Query(
             None, 
@@ -180,7 +180,7 @@ def create_department_crud_router(
         summary="获取部门详情",
         description="根据部门ID获取详情"
     )
-    async def get_department(
+    def get_department(
         dept_id: int = Query(..., description="部门ID"),
         include: Optional[str] = Query(
             None, 
@@ -224,7 +224,7 @@ def create_department_crud_router(
         summary="创建部门",
         description="创建新的部门"
     )
-    async def create_department(data: DepartmentCreate):
+    def create_department(data: DepartmentCreate):
         """创建部门"""
         try:
             dept = org_service.create_dept(
@@ -249,7 +249,7 @@ def create_department_crud_router(
         summary="更新部门",
         description="更新部门信息"
     )
-    async def update_department(
+    def update_department(
         data: DepartmentUpdate,
         dept_id: int = Query(..., description="部门ID"),
     ):
@@ -267,7 +267,7 @@ def create_department_crud_router(
         summary="移动部门",
         description="移动部门到新的父部门下"
     )
-    async def move_department(
+    def move_department(
         dept_id: int = Query(..., description="部门ID"),
         new_parent_id: Optional[int] = Query(None, description="新父部门ID，为空表示移到根级"),
     ):
@@ -284,7 +284,7 @@ def create_department_crud_router(
         summary="删除部门",
         description="删除部门（软删除）"
     )
-    async def delete_department(
+    def delete_department(
         dept_id: int = Query(..., description="部门ID"),
         force: bool = Query(False, description="是否强制删除（包括子部门）"),
     ):
@@ -308,7 +308,7 @@ def create_department_crud_router(
             summary="获取部门员工",
             description="获取指定部门的所有员工"
         )
-        async def get_dept_employees(
+        def get_dept_employees(
             dept_id: int = Query(..., description="部门ID"),
             emp_status: Optional[int] = Query(None, description="按雇佣状态筛选（-1-离职，0-停职，1-待入职，2-试用，3-在职）"),
             account_status: Optional[int] = Query(None, description="按账号状态筛选（-1-已禁用，0-未激活，1-已激活）"),
@@ -410,7 +410,7 @@ def create_department_crud_router(
             summary="添加部门负责人",
             description="将员工设为部门负责人"
         )
-        async def add_dept_leader(data: DeptLeaderCreate):
+        def add_dept_leader(data: DeptLeaderCreate):
             """添加部门负责人"""
             try:
                 leader = org_service.add_dept_leader(
@@ -433,7 +433,7 @@ def create_department_crud_router(
             summary="移除部门负责人",
             description="取消员工的部门负责人身份"
         )
-        async def remove_dept_leader(
+        def remove_dept_leader(
             employee_id: int = Query(..., description="员工ID"),
             dept_id: int = Query(..., description="部门ID"),
         ):
