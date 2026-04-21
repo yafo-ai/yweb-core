@@ -322,12 +322,16 @@ Phase 0 → Phase 1 → Phase 2 → ... → Phase 7
 - [ ] **8.7** 扫描并迁移上游项目（如 `y-sso-system`）中的 `run_db`
   - 目的：yweb-core 改名后，不引起依赖项目爆表
   - 动作（对每个上游项目）：
-    - [ ] `rg "run_db" <project>`
-    - [ ] 逐处判定：改 `await Model.query...`（首选）/ 改 `<新名>`（保守）
+    - [ ] `rg "\brun_db\b" <project>`
+    - [ ] 逐处判定：改 `def` 路由（首选）/ 改 `async_db_call`（保守）/ 改 `await Model.query...`（HybridQuery 上线后）
     - [ ] 跑上游测试确认
-  - 记录：`docs/orm_docs/assets/upstream_rundb_migration.md`（每个项目一个章节 + 改动清单）
+  - 记录：`docs/orm_docs/assets/upstream_rundb_migration.md` ✅ 2026-04-21 指南模板已写入
+    - 通用三步流程（扫描 / 决策树 / 回归）
+    - A/B/C 三种改法示例（def / async_db_call 改名 / lambda 包裹）
+    - y-sso-system 项目章节模板待填充（待进入上游仓实施）
+    - 常见坑 4 条（DeprecationWarning 残留 / 连接池 / fixture 异步/同步冲突 / 版本 pin 策略）
   - 已知上游：
-    - [ ] `y-sso-system`（或等价项目）
+    - [ ] `y-sso-system`（或等价项目，待实施）
     - [ ] 其他：`________________`
 
 **Phase 8 验收**：全仓找不到裸 `run_db`（除 alias）；上游项目全绿；文档 / rules / skills 对齐新命名。
@@ -348,3 +352,4 @@ Phase 0 → Phase 1 → Phase 2 → ... → Phase 7
 | 2026-04-21 | 执行 Phase 8.5 代码部分：`refactor(orm)! ff97dc6` `run_db` → `async_db_call`；保留 `run_db` 作为 deprecated alias 并新增 3 个 alias 测试 |
 | 2026-04-21 | 执行 Phase 0 全量扫描 + Phase 8.4 TODO 清理：7 份报告写入 `docs/orm_docs/assets/hq_scan_*.txt`。关键结论：生产代码 0 处 async+sync 残余、测试仅 1 处需迁移、无 `lazy='dynamic'`、无真隐式终端、`isinstance(Query)` 仅 `core_model.paginate` 1 处；同步 Phase 7.3 决策占位符为 D3=A |
 | 2026-04-21 | 执行 Phase 8.6：`README_DEV.md` 追加 `run_db → async_db_call` 迁移说明 + HybridQuery 预告；根 `README.md` 新增「异步路由」小节（零 async 指引的盲点补齐） |
+| 2026-04-21 | 执行 Phase 8.7 文档部分：写入 `assets/upstream_rundb_migration.md` 迁移指南模板（三步流程 + A/B/C 三种改法 + 4 条常见坑），y-sso-system 实施部分待进入上游仓后填充 |
