@@ -1,0 +1,61 @@
+Phase 0.6 / 0.7 — 运行时环境与连接池默认值
+扫描时间: 2026-04-21
+扫描命令: pip show anyio starlette; 人工读 yweb/orm/db_session.py
+
+========================================
+0.6 AnyIO / Starlette 版本
+========================================
+
+AnyIO:    4.13.0     （要求 >= 3.0 → 自动传递 contextvars 进线程池 ✅）
+Starlette: 1.0.0     （run_in_threadpool 底层复用 anyio.to_thread.run_sync ✅）
+
+含义:
+- async_db_call() 与未来 HybridQuery 终端对象的线程池调用路径会自动携带
+  当前协程的 contextvars（包含 scoped_session 需要的 request_id、
+  软删除开关、当前用户等）。
+- 不需要手写 contextvars.copy_context() 兜底；但若业务层绕开 async_db_call
+  / HybridQuery 自己用 loop.run_in_executor(executor, ...)，必须自行复制
+  （doc 22 §7.2.2 已警示）。
+
+========================================
+0.7 DB 连接池 / 线程池默认值
+========================================
+
+yweb DB 连接池（yweb/orm/db_session.py::DatabaseManager.init）:
+  pool_size:        5
+  max_overflow:     10
+  pool_timeout:     30 秒
+  pool_recycle:     3600 秒
+  pool_pre_ping:    True
+  最大并发连接数:   15（= pool_size + max_overflow）
+
+AnyIO 默认线程池:
+  total_tokens:     40（anyio.to_thread 默认 limiter）
+
+========================================
+压测容量对齐（Phase 5.2 用）
+========================================
+
+Phase 5.2 压测建议用例目标:
+  concurrency = pool_size + max_overflow + 5 = 20
+  验收:
+    1. 并发结束后 engine.pool.checkedout() == 0
+    2. 无 QueuePool TimeoutError
+    3. AnyIO 线程池 40 tokens 不会先于 DB 池 15 连接耗尽
+       （两者错位意味着可能出现线程拿不到 DB 连接的连锁等待）
+
+风险预警:
+  - 若线上 max_overflow 被调小（< pool_size）或并发高峰 > 15，HybridQuery
+    终端在线程池里 checkout 连接会出现排队 → 可能退化为串行化。
+  - 建议: 上线 HybridQuery 时在文档/CHANGELOG 中显式提示「async 路由改用
+    await .all() 后，并发模型仍为线程池 + 同步连接池，pool_size 未动则
+    吞吐量不会增加，只是 async 不再阻塞事件循环」。
+
+========================================
+结论
+========================================
+
+环境满足 HybridQuery 上线前提:
+  ✅ AnyIO >= 3.0 (contextvars 自动传递)
+  ✅ Starlette 提供 run_in_threadpool
+  ✅ 连接池参数已知、可入 Phase 5.2 压测脚本

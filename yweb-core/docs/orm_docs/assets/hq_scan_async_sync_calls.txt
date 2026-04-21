@@ -1,0 +1,33 @@
+Phase 0.4 — 扫描 async def 中的同步 ORM 调用（生产代码）
+扫描时间: 2026-04-21
+扫描命令: rg -U "async def \w+.*\n[^)]*\.query\." yweb-core/yweb
+扫描范围: yweb-core/yweb/**（生产代码）
+
+========================================
+命中结果: 0 条真实代码（命中全部为 docstring 示例）
+========================================
+
+命中分类:
+1. yweb/orm/async_safety.py _FIX_GUIDANCE 字符串
+   - 这是 SynchronousOnlyOperation 异常的修复指引文本，示意用户「原来错误用法」和
+     「修复后用法」。模板代码，非真实可执行路径。
+
+2. yweb/orm/db_session.py 模块 docstring
+   - 示意 async_db_call 使用方式的示例代码，非真实可执行路径。
+
+========================================
+对重构的含义
+========================================
+
+本次扫描重要结论: **生产代码中不存在「async def 路由直接调同步 ORM」的残余**。
+
+原因:
+- commit 0a5e5a8 把 yweb/auth/api/ 与 yweb/organization/api/ 下全部
+  原来的 async def 路由改回 def 路由（~46 处签名）
+- commit b1434c5 引入 AsyncSafeQueryProperty 与 check_async_safety()
+  作为防御，即使有遗漏也会在请求到达时显式抛 SynchronousOnlyOperation
+
+验证: HybridQuery 上线（Phase 4）时不需要对生产路由做任何「加 await」的迁移；
+Phase 5 只需要针对测试代码迁移。
+
+处置: 无需改动生产代码。Phase 5 只看测试扫描（0.5）与 Phase 4.5 实跑失败清单。

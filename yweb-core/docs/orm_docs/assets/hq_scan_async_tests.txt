@@ -1,0 +1,70 @@
+Phase 0.5 — 扫描 async def test_ 中直接使用 Model.query
+扫描时间: 2026-04-21
+扫描范围: yweb-core/tests/**
+
+扫描策略:
+  1. rg -U "async def test_\w+.*\n[^)]*\.query\." tests   (多行严格相邻)
+  2. 对所有同时包含「async def test_」与「.query.」的文件做人工复核
+
+========================================
+命中结果: 1 个文件需 Phase 5 处理，1 个已规避
+========================================
+
+A. 需要 Phase 5 迁移（1 处）
+----------------------------------------
+tests/test_scheduler/integration/test_history.py:392
+
+  @pytest.mark.asyncio
+  async def test_job_execution_records_history(self, scheduler_with_db, ...):
+      ...
+      await scheduler._execute_job(job_info, context)
+      ...
+      # 验证历史记录（需要查询数据库）
+      history = SchedulerJobHistory.query.filter(          # ← 位于 async 测试中
+          SchedulerJobHistory.job_code == "HISTORY_TEST"
+      ).first()
+
+  分析:
+    - 明确在 pytest-asyncio 的 async def 测试函数内
+    - 调用 Model.query 链 → 当前 AsyncSafeQueryProperty 会抛 SynchronousOnlyOperation
+    - 本测试目前通过的方式需要在 Phase 4 跑测试时实测确认:
+        可能 1: 测试 fixture 用 allow_sync() 临时旁路（需看 scheduler_with_db）
+        可能 2: 测试走的是 scheduler_db_session fixture 直接操作，未触发 query property
+        可能 3: 测试当前实际上就是 FAIL / SKIP 状态
+
+  Phase 5 处置:
+    - 优先: 改为 def test_job_execution_records_history（不混 async I/O）
+    - 次选: 包到 async_db_call: history = await async_db_call(
+                lambda: SchedulerJobHistory.query.filter(...).first())
+    - Phase 4 上线 HybridQuery 后: await SchedulerJobHistory.query.filter(...).first()
+
+B. 已规避（1 处，不需处理）
+----------------------------------------
+tests/test_orm/unit/test_async_safety.py
+
+  该文件是 async-safety 机制本身的测试，里面的 async 函数通过
+  async_db_call() 包装 query 调用，或显式验证「不包装会报错」
+  的反例行为，属于正确写法，无需 Phase 5 迁移。
+
+========================================
+候选但已排除的文件（人工复核）
+========================================
+
+下列文件同时含 async def test_ + .query.，但检查后确认 .query. 出现在
+sync 辅助函数 / fixture / 同步 test_ 内，非 async test 直接调用，无需处理:
+
+  - tests/test_scheduler/integration/test_api.py       (async 仅调 HTTP，query 在 setup fixture)
+  - tests/test_scheduler/unit/test_scheduler.py        (async 测试调 scheduler API，不调 .query.)
+  - tests/test_auth/test_audit.py                      (sync tests 调 .query.)
+  - 其余来自 tests/test_organization / tests/test_orm 的命中全部在 sync test_* 或 fixture 中
+
+（若上述判断需要逐文件确认，见 Phase 4.5 的实跑失败清单 hq_phase4_failing_async_tests.txt）
+
+========================================
+对重构的含义
+========================================
+
+- 迁移负担极小: 整个仓库只有 1 个 async def test_ 方法里直接用了 Model.query
+- Phase 5.1 对 tests/test_scheduler/ 的处理项只有这 1 条
+- Phase 4 上线后，这 1 处会是「唯一必须动的测试」，其他分类（test_auth /
+  test_organization / test_permission / test_orm）在 Phase 4 跑时大概率零失败

@@ -43,33 +43,44 @@ Phase 0 → Phase 1 → Phase 2 → ... → Phase 7
 
 目的：在动任何代码前，把仓库里会受 HybridQuery 影响的隐式依赖点扫清，避免实现后再补丁。
 
-- [ ] **0.1** 扫描 `lazy='dynamic'` 的关系（doc 22 §7.3.5）
+- [x] **0.1** 扫描 `lazy='dynamic'` 的关系（doc 22 §7.3.5）  ✅ 2026-04-21
   - 命令：`rg "lazy=['\"]dynamic['\"]" yweb-core/yweb`
-  - 产出：`docs/orm_docs/assets/hq_scan_lazy_dynamic.txt`（列出所有命中）
-  - 决策：对每一个命中标注「HybridQuery 也包 AppenderQuery」或「文档禁用、async 走 async_db_call」
-- [ ] **0.2** 扫描 `isinstance(x, Query)` / `type(x) is Query`
+  - 产出：`docs/orm_docs/assets/hq_scan_lazy_dynamic.txt`
+  - 结果：**0 命中**。本仓无 AppenderQuery，HybridQuery 不需要为之特殊包装。若上游项目（如 `y-sso-system`）自建 `lazy='dynamic'`，由他们侧用 `async_db_call` 包装。
+- [x] **0.2** 扫描 `isinstance(x, Query)` / `type(x) is Query`  ✅ 2026-04-21
   - 命令：`rg "isinstance\([^,]+,\s*Query\)" yweb-core`
   - 产出：`assets/hq_scan_isinstance_query.txt`
-  - 决策：逐个改 duck typing 或引用底层 `_query`
-- [ ] **0.3** 扫描 `for ... in ...query` / `query[...]` / `bool(query)` 等隐式终端（doc 22 §7.3.4）
-  - 命令：`rg "for .+ in .+\.query" yweb-core`（此模式噪声大，需人工筛选）
+  - 结果：**1 命中** — `yweb/orm/core_model.py:1025`（`paginate` 入口的 `Query` vs `Select` 分支判断）
+  - 处置：Phase 3.2 实现 `HybridQuery.paginate` 时改为 `isinstance(q, (Query, HybridQuery))`，HybridQuery 分支内部取 `._query` 后复用原流程
+- [x] **0.3** 扫描 `for ... in ...query` / `query[...]` / `bool(query)` 等隐式终端（doc 22 §7.3.4）  ✅ 2026-04-21
+  - 命令：`rg "for \w+ in \w+\.query"` + 跨行人工复核
   - 产出：`assets/hq_scan_implicit_terminals.txt`
-  - 决策：清单化，Phase 3 里逐个在 HybridQuery 中决定「禁用 / 透传 / 代理」
-- [ ] **0.4** 扫描业务代码里 **async def 路由中的同步 ORM 调用**
-  - 命令：`rg -U "async def \w+.*\n.*\.query\." yweb-core`（multiline）
+  - 结果：**真正隐式终端 0 命中**；6 处疑似命中全部是 `[x for ... in Model.query.filter(...).all()]` 形式（`.all()` 在下一行），Python 先求 list 再迭代，不是迭代 Query 本身
+  - 处置：Phase 2.2「`__iter__/__getitem__/__bool__` 禁用 + 明确异常」设计保留为防御，不涉及现有业务代码迁移
+- [x] **0.4** 扫描业务代码里 **async def 路由中的同步 ORM 调用**  ✅ 2026-04-21
+  - 命令：`rg -U "async def \w+.*\n[^)]*\.query\." yweb-core/yweb`
   - 产出：`assets/hq_scan_async_sync_calls.txt`
-  - 用途：Phase 5 测试迁移的参照基准
-- [ ] **0.5** 枚举现有测试在 `async def test_` 里直接使用 `Model.query` 的点
-  - 命令：`rg -U "async def test_.+\n.*\.query\." yweb-core/tests`
+  - 结果：**真实代码 0 命中**（命中全在 `async_safety.py` 的 `_FIX_GUIDANCE` 与 `db_session.py` docstring 示例里）
+  - 原因：commit `0a5e5a8` 已把 `yweb/auth/api/` + `yweb/organization/api/` 全部路由从 `async def` 改回 `def`
+- [x] **0.5** 枚举现有测试在 `async def test_` 里直接使用 `Model.query` 的点  ✅ 2026-04-21
+  - 命令：`rg -U "async def test_\w+.*\n[^)]*\.query\." yweb-core/tests` + 人工复核所有同时含两个模式的文件
   - 产出：`assets/hq_scan_async_tests.txt`
-- [ ] **0.6** 确认 AnyIO / Starlette 版本
-  - 动作：`pip show anyio starlette` 或检查 `pyproject.toml`
-  - 记录：`anyio>=3.0` 保证 `to_thread.run_sync` 自动传 `contextvars`
-- [ ] **0.7** 记录当前 DB 连接池/线程池默认值，写入本清单 Phase 3.x 的容量对齐检查项
-  - AnyIO 默认：`anyio.to_thread.current_default_thread_limiter().total_tokens`（通常 40）
-  - yweb 默认：`pool_size=5, max_overflow=10`（`db_session.py`）
+  - 结果：**Phase 5 需迁移 1 处** — `tests/test_scheduler/integration/test_history.py:392`（`async def test_job_execution_records_history` 内的 `SchedulerJobHistory.query.filter(...).first()`）
+  - 其他候选文件全部在 sync test 或 fixture 里用 `.query.`，无需处理
+- [x] **0.6** 确认 AnyIO / Starlette 版本  ✅ 2026-04-21
+  - 结果：`AnyIO 4.13.0` / `Starlette 1.0.0`
+  - 验证：AnyIO >= 3.0 → `to_thread.run_sync` 自动传 `contextvars` ✅（request_id / 软删除开关自动进线程池）
+- [x] **0.7** 记录当前 DB 连接池/线程池默认值  ✅ 2026-04-21
+  - 产出：`assets/hq_scan_env_pool.txt`
+  - yweb DB 池（`db_session.py:156-157, 491-492`）：`pool_size=5, max_overflow=10, pool_timeout=30s` → **最大并发 15**
+  - AnyIO 线程池：默认 `total_tokens=40`
+  - Phase 5.2 压测用例目标：`concurrency = 5 + 10 + 5 = 20`；验收 `engine.pool.checkedout() == 0`
 
-**Phase 0 验收**：所有扫描产物已 commit 到 `docs/orm_docs/assets/hq_scan_*.txt`；有明确的「每一项如何处置」的决策记录。
+**Phase 0 验收**：✅ 7 份扫描产物已写入 `docs/orm_docs/assets/hq_scan_*.txt`；每项都有「结果 + 处置」决策。**关键发现**：
+1. 生产代码 **0 处** `async def` + 同步 ORM（路由迁移已完成）；
+2. 测试代码仅 **1 处** 需要 Phase 5 迁移；
+3. `isinstance(Query)` 仅 **1 处**（`paginate` 内部）；
+4. 本仓无 `lazy='dynamic'`、无真正隐式终端。HybridQuery 上线的迁移负担比 doc 22 的风险清单预估低得多。
 
 ---
 
@@ -241,7 +252,7 @@ Phase 0 → Phase 1 → Phase 2 → ... → Phase 7
 - [ ] **7.3** 回滚脚本 / 开关：
   - 选项 A（推荐）：环境变量 `YWEB_HYBRID_QUERY=off` → 回退到旧 `AsyncSafeQueryProperty`
   - 选项 B：git revert Phase 4 的 commit
-  - 决策记录：`[ ] 最终方案 = ___________________`
+  - 决策记录：`[x] 最终方案 = A（YWEB_HYBRID_QUERY=off 环境变量回退，D3 锁定 2026-04-20）`
 - [ ] **7.4** 迁移指南：上游项目（如 `y-sso-system`）升级 yweb 时的 5 分钟迁移步骤
   - [ ] 检查 async 路由：`rg -U "async def \w+.*\n.*\.query\." <project>`
   - [ ] 每处判定「加 `await` / 改 `def` / `await async_db_call`」
@@ -276,11 +287,13 @@ Phase 0 → Phase 1 → Phase 2 → ... → Phase 7
   - 产出：`docs/orm_docs/assets/hq_scan_async_call_sites.md`（分类表）
   - 依赖：D5（`run_db` → `async_db_call`）已锁定并实施（见 8.5）
 
-- [ ] **8.4** 清理 HybridQuery 相关 TODO
-  - 动作：`rg "TODO.*(HybridQuery|run_db|async.*query|AsyncSafeQueryProperty)" yweb tests`
-  - 每个 TODO 标注「已解决」/「仍有效，迁到 issue」/「过时，删除」
-  - 本清单内的 `[ ] 最终方案 = ___________________` 占位符也要在决策后更新
-  - 验收：剩余 TODO 要么被删，要么有跟踪单号
+- [x] **8.4** 清理 HybridQuery 相关 TODO  ✅ 2026-04-21
+  - 动作：`rg -i "TODO.*(HybridQuery|run_db|async.*query|AsyncSafeQueryProperty|async_db_call)" yweb tests`
+  - 产出：`assets/hq_scan_todos.txt`
+  - 结果：**生产代码 + 测试 0 命中**。从 Phase 1（mixins bug 修复）到 Phase 8.5（`run_db` 改名）全部是「完成闭环」，无 TODO 残留
+  - 清单内两个 `[ ] 最终方案 = ___________________` 占位符状态：
+    - Phase 3.3（同步/异步双面）：**未决策**，等 Phase 3 开工时填入
+    - Phase 7.3（回滚开关）：**已决策为 D3=A**（`YWEB_HYBRID_QUERY=off` 环境变量回退），占位符同步更新
 
 - [x] **8.5** `run_db` 改名（D5）✅ 2026-04-21 完成
   - **当前名**：`run_db`（`yweb/orm/db_session.py`，`from starlette.concurrency import run_in_threadpool` 的 ORM 专用薄包装）
@@ -334,3 +347,4 @@ Phase 0 → Phase 1 → Phase 2 → ... → Phase 7
 | 2026-04-21 | 顺带修复 `fix(auth) 8743d1a`：OIDC userinfo 路由方法名+参数与真实 OidcManager 对齐（含两个测试 mock 同步） |
 | 2026-04-21 | 独立新增 `feat(auth) 7e5f887`：JWTManager 支持自定义 `kid` header（JWKS 场景） |
 | 2026-04-21 | 执行 Phase 8.5 代码部分：`refactor(orm)! ff97dc6` `run_db` → `async_db_call`；保留 `run_db` 作为 deprecated alias 并新增 3 个 alias 测试 |
+| 2026-04-21 | 执行 Phase 0 全量扫描 + Phase 8.4 TODO 清理：7 份报告写入 `docs/orm_docs/assets/hq_scan_*.txt`。关键结论：生产代码 0 处 async+sync 残余、测试仅 1 处需迁移、无 `lazy='dynamic'`、无真隐式终端、`isinstance(Query)` 仅 `core_model.paginate` 1 处；同步 Phase 7.3 决策占位符为 D3=A |
