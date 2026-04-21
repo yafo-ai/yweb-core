@@ -954,6 +954,7 @@ def _create_jwt_manager(jwt_settings) -> JWTManager:
         return JWTManager(
             secret_key=jwt_conf.secret_key,
             algorithm=jwt_conf.algorithm,
+            key_id=getattr(jwt_conf, 'key_id', None),
             access_token_expire_minutes=jwt_conf.access_token_expire_minutes,
             refresh_token_expire_days=jwt_conf.refresh_token_expire_days,
             refresh_token_sliding_days=getattr(jwt_conf, 'refresh_token_sliding_days', 2),
@@ -967,6 +968,7 @@ def _create_jwt_manager(jwt_settings) -> JWTManager:
         return JWTManager(
             secret_key=jwt_settings.secret_key,
             algorithm=getattr(jwt_settings, 'algorithm', 'HS256'),
+            key_id=getattr(jwt_settings, 'key_id', None),
             access_token_expire_minutes=getattr(jwt_settings, 'access_token_expire_minutes', 30),
             refresh_token_expire_days=getattr(jwt_settings, 'refresh_token_expire_days', 7),
             refresh_token_sliding_days=getattr(jwt_settings, 'refresh_token_sliding_days', 2),

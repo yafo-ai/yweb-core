@@ -51,6 +51,7 @@ class JWTManager:
     Args:
         secret_key: JWT 密钥
         algorithm: 加密算法，默认 HS256
+        key_id: 可选的 JWT Header `kid`，用于 JWKS 选键
         access_token_expire_minutes: 访问令牌过期时间（分钟）
         refresh_token_expire_days: 刷新令牌过期时间（天）
         refresh_token_sliding_days: Refresh Token 滑动过期阈值（天），
@@ -81,6 +82,7 @@ class JWTManager:
         self,
         secret_key: str,
         algorithm: str = "HS256",
+        key_id: Optional[str] = None,
         access_token_expire_minutes: int = 30,
         refresh_token_expire_days: int = 7,
         refresh_token_sliding_days: int = 2,
@@ -109,9 +111,20 @@ class JWTManager:
         
         self.secret_key = secret_key
         self.algorithm = algorithm
+        self.key_id = key_id
         self.access_token_expire_minutes = access_token_expire_minutes
         self.refresh_token_expire_days = refresh_token_expire_days
         self.refresh_token_sliding_days = refresh_token_sliding_days
+
+    def _build_headers(self) -> Optional[Dict[str, str]]:
+        """构造 JWT header。
+
+        RS256/JWKS 等场景需要 `kid` 让消费方能从 JWKS 中选中正确公钥。
+        未配置时返回 None，保持既有 header 行为不变。
+        """
+        if not self.key_id:
+            return None
+        return {"kid": self.key_id}
     
     def create_access_token(
         self,
@@ -151,7 +164,12 @@ class JWTManager:
         data["exp"] = expire
         data["iat"] = datetime.now(timezone.utc)
         
-        return jwt.encode(data, self.secret_key, algorithm=self.algorithm)
+        return jwt.encode(
+            data,
+            self.secret_key,
+            algorithm=self.algorithm,
+            headers=self._build_headers(),
+        )
     
     def create_refresh_token(
         self,
@@ -190,7 +208,12 @@ class JWTManager:
         data["exp"] = expire
         data["iat"] = datetime.now(timezone.utc)
         
-        return jwt.encode(data, self.secret_key, algorithm=self.algorithm)
+        return jwt.encode(
+            data,
+            self.secret_key,
+            algorithm=self.algorithm,
+            headers=self._build_headers(),
+        )
     
     def verify_token(
         self, token: str, raise_on_expired: bool = False
