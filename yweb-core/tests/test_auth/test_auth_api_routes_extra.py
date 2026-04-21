@@ -296,10 +296,10 @@ class OIDCManagerStub:
     def get_jwks(self):
         return {"keys": [{"kty": "RSA", "kid": "kid-1"}]}
 
-    def get_userinfo_claims(self, user_id: str, scope: str):
+    def get_userinfo(self, user_id, scopes):
         if str(user_id) == "404":
             return None
-        return {"sub": str(user_id), "scope": scope}
+        return {"sub": str(user_id), "scope": " ".join(scopes) if scopes else ""}
 
 
 class OIDCValidateTokenStub:

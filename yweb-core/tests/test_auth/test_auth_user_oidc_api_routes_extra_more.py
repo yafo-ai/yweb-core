@@ -119,8 +119,8 @@ class SampleOidcManager:
     def get_jwks(self):
         return {"keys": [{"kid": "k1"}]}
 
-    def get_userinfo_claims(self, user_id: str, scope: str):
-        _ = scope
+    def get_userinfo(self, user_id, scopes):
+        _ = scopes
         if str(user_id) == "404":
             return None
         return {"sub": str(user_id)}
