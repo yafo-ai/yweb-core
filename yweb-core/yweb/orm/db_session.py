@@ -573,51 +573,72 @@ def db_session_scope(
     auto_commit: bool = True
 ) -> Generator[Session, None, None]:
     """非 HTTP 场景的 session 上下文管理器
-    
+
     自动管理 session 生命周期，包括：
     - 设置请求ID（用于日志追踪）
     - 自动提交或回滚
     - 自动清理 session
-    
+
     Args:
         request_id: 请求ID，用于日志追踪，不传则自动生成
         auto_commit: 是否自动提交，默认 True
-    
+
     Yields:
         Session 对象
-    
+
+    同步/异步上下文：
+        此上下文管理器在 **async 上下文**下也可直接使用 —— 内部会自动启用
+        :func:`allow_sync` bypass。语义：使用者已通过显式开 scope 声明"这段代码
+        允许执行同步 DB 操作"（例如一次性脚本、async startup 初始化、
+        APScheduler 定时任务协程等）。
+
+        .. warning::
+            虽然 scope 内可以直接用同步 ORM，但这会阻塞事件循环。
+            **不要在 FastAPI 请求处理路由中使用 db_session_scope**，
+            那里应该用 ``def`` 路由或 :func:`async_db_call`。
+
     使用示例:
-        # 脚本中
+        # 脚本中（同步）
         from yweb.orm import db_session_scope
-        
+
         with db_session_scope() as session:
             user = User(name="test")
             session.add(user)
         # 自动提交并清理，无需手动调用
-        
+
+        # async 脚本 / 定时任务
+        async def daily_report_job():
+            with db_session_scope(request_id="daily-report") as session:
+                # 同步 ORM 可直接用（scope 内部已 allow_sync bypass）
+                users = User.query.all()
+                # 异步终端也可以混用（HybridQuery 下）
+                count = await User.query.count()
+                ...
+
         # 手动控制提交
         with db_session_scope(auto_commit=False) as session:
             user = session.query(User).first()
             user.name = "updated"
-            session.commit()  # 手动提交
-        
-        # 带请求ID（便于日志追踪）
-        with db_session_scope(request_id="daily-report") as session:
-            # 业务逻辑...
-            pass
-    """
-    # 设置请求ID
-    db_manager._set_request_id(request_id)
-    session = db_manager.get_session()
-    try:
-        yield session
-        if auto_commit:
             session.commit()
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        on_request_end()
+    """
+    from .async_safety import allow_sync
+
+    # 整个 scope 生命周期内启用 allow_sync bypass —— 覆盖：
+    # - get_session() 里的 check_async_safety()
+    # - 用户在 scope 内的同步 ORM 操作（.query / .commit 等）
+    # - on_request_end() 里任何潜在的 async_safety 检测
+    with allow_sync():
+        db_manager._set_request_id(request_id)
+        session = db_manager.get_session()
+        try:
+            yield session
+            if auto_commit:
+                session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            on_request_end()
 
 
 def with_db_session(

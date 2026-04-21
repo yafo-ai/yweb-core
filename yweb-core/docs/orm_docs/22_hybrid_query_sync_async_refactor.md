@@ -540,6 +540,7 @@ SA `Query` 除了 `.all() / .first() / .count()` 这些显式终端，还有若�
 - 现状：`allow_sync()` 通过 `ContextVar` bypass `check_async_safety()`，既救 `get_session()` 也救 `AsyncSafeQueryProperty`。
 - HybridQuery 落地后，`AsyncSafeQueryProperty` 被拿掉，`allow_sync()` **只剩** `get_session()` 一条路径生效。
 - **对策**：`async_safety.py` 的 docstring 与 §12 文档都要改描述（从「`query` + `get_session` 双防」改成「仅 `get_session` 写路径防御；读路径由 HybridQuery 接管」）；保留 `allow_sync()` 给 FastAPI `lifespan`（启动时 `init_database` / `auto_sync_permissions` 等）。
+- **Phase 5B.2 后续**：`db_session_scope()` 内部已自动 `with allow_sync():` 包裹整个 scope，async 脚本/定时任务可直接 `with db_session_scope(): ...` 用同步 ORM，无需手动再套 `allow_sync()`。用户语义：**「显式开 scope = 显式声明『这段代码段允许同步 DB 操作』」**。
 
 #### 7.3.8 测试代码迁移（必须与 HybridQuery PR 同一批交付）
 

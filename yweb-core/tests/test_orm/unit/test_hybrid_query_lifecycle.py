@@ -218,13 +218,11 @@ class TestLifecycleWithoutMiddleware:
 class TestLifecycleScriptEntry:
     """脚本/定时任务入口：db_session_scope() 的 session 生命周期
 
-    L6 原设计（doc 22 §7.2.3）：`with db_session_scope(): await q.all()`
-    现状：db_session_scope 内部调用 db_manager.get_session() → 触发
-    check_async_safety() 在 async 上下文里直接 raise SynchronousOnlyOperation。
-    这是一个 API gap：同步 scope 入口不能在 async 脚本里自然嵌套。
-    本类只验证同步脚本基线 + async 脚本场景的已知 gap；修复方案
-    （让 db_session_scope 在 async 上下文里自动 allow_sync 或提供
-    async 等价入口）已记入 23 号清单 Phase 6。
+    L6 覆盖 doc 22 §7.2.3 的脚本入口场景：
+    - L6a / L6b：同步脚本下 `with db_session_scope():` 自动清理（含异常路径）
+    - L6c：async 脚本 **推荐路径** —— async_db_call + on_request_end
+    - L6d：Phase 5B.2 方案 A 落地后，async 脚本下也可直接 `with db_session_scope():`
+          （内部自动 allow_sync），验证：可进入 / 可 commit / 退出后 session 清理
     """
 
     @pytest.fixture(autouse=True)
@@ -261,15 +259,43 @@ class TestLifecycleScriptEntry:
         assert _registry_has() is False
 
     @pytest.mark.asyncio
-    async def test_l6d_db_session_scope_inside_async_is_currently_gap(self):
-        """L6d (KNOWN GAP → Phase 6):
-        doc 22 §7.2.3 描述的 `with db_session_scope(): await q.all()` 在 async 脚本
-        里目前会抛 SynchronousOnlyOperation，因为 db_session_scope.get_session()
-        内部走 check_async_safety()。此用例以可重复的方式固化这个现状，
-        防止 Phase 6 修复时无声回归。
-        """
-        from yweb.orm.async_safety import SynchronousOnlyOperation
+    async def test_l6d_db_session_scope_usable_in_async(self):
+        """L6d (Phase 5B.2 方案 A)：async 上下文下 `with db_session_scope():` 可用
 
-        with pytest.raises(SynchronousOnlyOperation):
+        Phase 5B.2 落地：db_session_scope 内部自动 allow_sync bypass，
+        使用者在 async 脚本里可直接 `with db_session_scope():` 做同步 ORM 操作，
+        退出后 session 正常清理。
+        """
+        with db_session_scope():
+            users = LifecycleUser.query.all()
+            assert len(users) >= 1
+        assert _registry_has() is False, (
+            "async 下 db_session_scope 退出后应清理 session"
+        )
+
+    @pytest.mark.asyncio
+    async def test_l6e_db_session_scope_in_async_commits_on_exit(self):
+        """L6e: async 下 db_session_scope 的 auto_commit 真的落库"""
+        new_name = "l6e-async-written"
+        with db_session_scope():
+            LifecycleUser(name=new_name, email="l6e@example.com").save()
+
+        with db_session_scope():
+            got = LifecycleUser.query.filter(LifecycleUser.name == new_name).first()
+            assert got is not None, "auto_commit 未落库"
+            assert got.email == "l6e@example.com"
+
+    @pytest.mark.asyncio
+    async def test_l6f_db_session_scope_in_async_rolls_back_on_exception(self):
+        """L6f: async 下 db_session_scope 异常路径 rollback + 清理"""
+        marker = "l6f-should-not-persist"
+        with pytest.raises(RuntimeError, match="boom-async"):
             with db_session_scope():
-                pass
+                LifecycleUser(name=marker, email="l6f@example.com").save()
+                raise RuntimeError("boom-async")
+
+        assert _registry_has() is False, "异常路径未清理 session"
+
+        with db_session_scope():
+            got = LifecycleUser.query.filter(LifecycleUser.name == marker).first()
+            assert got is None, "rollback 未生效，脏数据已落库"

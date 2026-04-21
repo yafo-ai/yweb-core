@@ -23,6 +23,7 @@ Phase 4 起的角色分工
     - async def + async_db_call()（线程池）→ 放行
     - async def 直接调 Session.execute / Session.query → 拦截
     - async def + allow_sync()          → 放行（如 lifespan 启动初始化）
+    - async def + with db_session_scope(): → 放行（scope 内部自动 allow_sync）
     - 脚本 / 测试 / 定时任务            → 放行
 
 公开 API:
