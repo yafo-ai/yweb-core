@@ -278,7 +278,7 @@ flowchart TD
 | `update`（`Query.update()`，若使用） | **✅ 计划支持** | 同上，委托 + 终端 await。 |
 | `paginate`（挂在 `Query` 上的扩展） | **⚠️ 需单独适配** | `CoreModel._add_paginate_to_query` 注入；内部含 `count` + `slice`，应对齐同步/await 语义并单测。 |
 
-**实现要点**：终端调用返回 **可同时** 同步求值与 **`await`** 的对象（`__await__` + 与 FastAPI 序列化兼容的同步面，需在实现阶段定稿）。
+**实现要点**（2026-04-21 定稿，见 23 号清单 Phase 3.3）：终端方法在**同步上下文**立即求值返回原生结果（`list` / Model / `int` / `Page`）；在 **async 上下文**返回 `_HybridTerminal`（可 `await`）。用户在 async 中忘 `await` 时拿到的是 `_HybridTerminal` 对象，下一行操作（迭代 / 索引 / 属性访问）自然触发 `TypeError`，避免静默阻塞事件循环。不对外暴露 `.value()` / `.result()` 公开同步入口（`_HybridTerminal._run_sync()` 作为下划线 escape hatch）；写终端（`delete` / `update`）与读终端走同一策略。
 
 #### 5.1.3 `Model.query.session`（属性透传）
 

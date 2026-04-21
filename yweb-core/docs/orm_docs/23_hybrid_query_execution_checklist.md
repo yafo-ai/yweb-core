@@ -152,9 +152,22 @@ Phase 0 → Phase 1 → Phase 2 → ... → Phase 7
   - [ ] `delete`（`Query.delete()`，写终端）
   - [ ] `update`（`Query.update()`，写终端）
   - [ ] `paginate`（走 `CoreModel._add_paginate_to_query` 注入的方法；内部 `count + slice` 在**同一线程池回合**内完成，避免两次跳线程）
-- [ ] **3.3** 同步 / 异步双面：
-  - 约定：终端对象**不自动**在同步上下文里隐式求值；用户要么 `await`，要么 `.value()` / `result()` 显式同步入口（**二选一**，Phase 3 初评建议走「链式方法在同步上下文直接调用时**立即求值**返回原生结果，async 上下文返回 `_HybridTerminal`」——决定后在本条标注最终方案）
-  - 决策记录：`[ ] 最终方案 = ___________________`
+- [x] **3.3** 同步 / 异步双面  ✅ 2026-04-21 决策锁定
+  - **主方案 = A（上下文感知）**：终端方法在同步上下文立即求值返回原生结果（`list` / Model / `int` / `Page`）；在 async 上下文返回 `_HybridTerminal`（可 `await`）
+  - **async 忘 await 策略 = A2**：async 中未 `await` 的用户拿到的是 `_HybridTerminal` 对象，下一行操作（迭代 / 索引 / 属性访问）自然触发 `TypeError`，**让错误显形**，避免 A1 式的静默阻塞事件循环
+  - **公开同步入口：不暴露**。`_HybridTerminal._run_sync()` 作为下划线内部 escape hatch；不提供 `.value()` / `.result()` 避免与「同步直接调用」造成双写法混淆
+  - **写终端（`delete` / `update`）与读终端同策略**（A + A2），不做特殊化
+  - 契约方法签名模板（Phase 2 / Phase 3 所有终端方法复用）：
+    ```python
+    def all(self) -> list[T] | _HybridTerminal[list[T]]:
+        try:
+            asyncio.get_running_loop()
+            return _HybridTerminal(lambda: self._query.all())
+        except RuntimeError:
+            return self._query.all()
+    ```
+  - 对 Phase 2.2 的约束：`HybridQuery` 链式对象的 `__iter__` / `__getitem__` / `__bool__` 仍需禁用（doc 22 §7.3.4），与 A2 不冲突 —— A2 只管终端方法（`.all()` 等显式调用）的返回类型；链式对象的隐式终端禁用仍由 Phase 2.2 处理。二者组合后：同步链式 → 正常用；async 链式迭代 → Phase 2.2 抛异常；async 终端方法漏 `await` → A2 让 `TypeError` 显形
+  - 决策记录：`[x] 最终方案 = A + A2（context-aware + return terminal on missing await）`
 - [ ] **3.4** 测试 `tests/test_orm/unit/test_hybrid_query_terminal.py`（新建）
   - 每个终端方法：同步/异步两种路径各一个用例
   - 一次性语义：二次 `await` 抛明确异常
@@ -353,3 +366,4 @@ Phase 0 → Phase 1 → Phase 2 → ... → Phase 7
 | 2026-04-21 | 执行 Phase 0 全量扫描 + Phase 8.4 TODO 清理：7 份报告写入 `docs/orm_docs/assets/hq_scan_*.txt`。关键结论：生产代码 0 处 async+sync 残余、测试仅 1 处需迁移、无 `lazy='dynamic'`、无真隐式终端、`isinstance(Query)` 仅 `core_model.paginate` 1 处；同步 Phase 7.3 决策占位符为 D3=A |
 | 2026-04-21 | 执行 Phase 8.6：`README_DEV.md` 追加 `run_db → async_db_call` 迁移说明 + HybridQuery 预告；根 `README.md` 新增「异步路由」小节（零 async 指引的盲点补齐） |
 | 2026-04-21 | 执行 Phase 8.7 文档部分：写入 `assets/upstream_rundb_migration.md` 迁移指南模板（三步流程 + A/B/C 三种改法 + 4 条常见坑），y-sso-system 实施部分待进入上游仓后填充 |
+| 2026-04-21 | 锁定 Phase 3.3 决策：A（上下文感知）+ A2（async 忘 await 返回 terminal 对象让错误显形）；不暴露公开 `.value()` / `.result()`；写终端与读终端同策略。同步收口 22 号文档 §5.1.2 最后一句 |
