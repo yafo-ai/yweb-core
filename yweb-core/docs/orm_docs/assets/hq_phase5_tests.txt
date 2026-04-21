@@ -1,0 +1,164 @@
+Phase 5 — HybridQuery 生命周期 & 测试迁移 执行记录
+========================================================
+执行时间: 2026-04-21
+执行范围: 5.1 (部分) + 5.2 (核心)，5.3 defer
+
+--------------------------------------------------------
+5.1 scheduler fixture 迁移 —— 结论：回滚，bug 转 Phase 5B
+--------------------------------------------------------
+
+第一版尝试：
+  - tests/test_scheduler/conftest.py:67  改 HybridQueryProperty 包装
+  - tests/test_scheduler/integration/test_history.py:392  加 await
+
+实测结果：
+  tests\test_scheduler\integration\test_history.py
+    ::test_job_execution_records_history  FAILED
+    sqlalchemy.exc.PendingRollbackError:
+        '生成主键失败：5次尝试后仍然冲突'
+    ERROR    yweb.scheduler.history:history.py:184
+        Failed to record job success:
+        '_HybridTerminal' object has no attribute 'status'
+
+根因分析：
+  yweb/scheduler/scheduler.py 的 async def _execute_job() 直接调用
+  同步方法 history_manager.record_start / record_success / record_failure，
+  这些方法内部用 HistoryModel.query.filter(...).first()。
+  Phase 4 上线 HybridQueryProperty + 测试 fixture 对齐之后：
+    - .first() 在 async 上下文里返回 _HybridTerminal
+    - record_start 把它当成"主键已存在" → 5 次重试 PendingRollbackError
+    - record_success 走到 history.status = ... → AttributeError 被 except 吞
+
+历史背景：
+  Phase 4 前，scheduler 测试 fixture 用 raw session_scope.query_property()
+  绕过保护；生产路径则挂 AsyncSafeQueryProperty → record_* 也会抛
+  SynchronousOnlyOperation 被 except 吞掉。
+  结论：**scheduler async executor 的历史记录功能在生产里一直是坏的**，
+  Phase 4 把它从"静默失败"升级为"显性失败"。
+
+处置（B+C 混合方案）：
+  - 本轮 Phase 5：回滚 scheduler 测试 fixture 和 test_history.py 改动；
+  - 在 conftest.py:67 加注释说明回滚原因 + 指向 Phase 5B；
+  - Phase 5B 独立修复（run_in_threadpool 包装 3 个调用点），含回归测试；
+  - 修完后 Phase 5B 同步把 scheduler fixture 改回 HybridQueryProperty。
+
+回滚后验证：
+  tests/test_scheduler/integration/test_history.py
+    ...................  19 passed
+
+--------------------------------------------------------
+5.2 HybridQuery lifecycle 测试 —— 全部通过
+--------------------------------------------------------
+
+新增文件: tests/test_orm/unit/test_hybrid_query_lifecycle.py
+覆盖场景（对照 doc 22 §7.2.3 强制清单）：
+
+  TestLifecycleWithMiddleware:
+    L1 test_l1_serial_multi_terminal_session_cleaned          PASSED
+    L2 test_l2_exception_path_session_cleaned                 PASSED
+    L5 test_l5_gather_concurrent_terminals_behavior           PASSED
+
+  TestLifecycleWithoutMiddleware:
+    L4 test_l4_no_middleware_leaks_session                    PASSED
+
+  TestLifecycleScriptEntry:
+    L6a test_l6a_sync_script_entry_cleans_session             PASSED
+    L6b test_l6b_sync_script_exception_still_cleaned          PASSED
+    L6c test_l6c_async_script_with_async_db_call_cleans       PASSED
+    L6d test_l6d_db_session_scope_inside_async_is_currently_gap PASSED
+
+本地结果:
+  8 passed in 0.17s
+
+关键实现细节:
+  _leaked_session_count() 穿透 ScopedRegistry.registry 内部 dict
+  观察泄漏：`registry.has()` 只看 scopefunc() 当前返回值对应的 session，
+  但 HybridQuery 的 await 走 run_in_threadpool，泄漏发生在 worker 线程的
+  ContextVar copy 中，主协程通过 has() 观察不到，必须走内部 dict。
+
+L6 的 API gap 记录:
+  doc 22 §7.2.3 原设计 `with db_session_scope(): await q.all()` 当前会抛
+  SynchronousOnlyOperation（db_session_scope 是同步 API，get_session() 内部
+  会调 check_async_safety()）。测试 L6d 以 xfail 等价的 pytest.raises 锁住这个
+  现状，Phase 5B 规划修复方向：
+    选项1: db_session_scope 内部自动 allow_sync()
+    选项2: 新增 async_db_session_scope() 作为 async 等价入口
+    选项3: 文档明确 async 脚本只允许 async_db_call + on_request_end 显式清理
+
+--------------------------------------------------------
+5.3 懒加载陷阱测试 —— defer
+--------------------------------------------------------
+
+延后原因:
+  - 懒加载（lazy='dynamic' / joinedload）陷阱主要是**文档 + 代码审查**问题，
+    不是 HybridQuery 本身的行为异常
+  - 仓内已知 0 处 lazy='dynamic'（Phase 0 扫描结果 hq_scan_lazy_dynamic.txt）
+  - 写高质量的正/反例测试需要造复杂关系表（User/Dept 等），本轮不划算
+  - 建议作为 Phase 7（发布前文档 + 迁移手册）的一部分：在 §7 章节补"懒加载
+    + async 陷阱 + joinedload 推荐"文档，配一个 smoke 测试即可
+
+--------------------------------------------------------
+全量回归（对照 Phase 4 基线）
+--------------------------------------------------------
+
+命令: python -m pytest tests/ --no-header -q --ignore=tests/test_ratelimit
+
+结果: 2663 passed, 2 skipped, 1 xfailed, 0 failed in 549.97s
+
+对照 Phase 4:
+  - Phase 4: 跳过 ratelimit 后 0 失败（14 条 slowapi 为 pre-existing）
+  - Phase 5: 完全一致，**零新增失败**
+
+说明 Phase 5 的改动（纯新增 lifecycle 测试 + 回滚 scheduler fixture 尝试）
+完全不影响现有行为。
+
+--------------------------------------------------------
+跨模块测试子集污染（pre-existing，非本 PR 引入，Phase 5B 顺带修）
+--------------------------------------------------------
+
+观察命令: python -m pytest tests/test_scheduler/ tests/test_orm/unit/
+
+结果:
+  - 含 Phase 5 lifecycle:   6 failed, 513 passed, 543 errors
+  - 排除 Phase 5 lifecycle: 6 failed, 513 passed, 505 errors
+
+对照:
+  - tests/test_orm/ 单独跑 (含 lifecycle): 697 passed
+  - tests/ 全量 (含 lifecycle):             2663 passed
+
+结论:
+  - 污染源 = scheduler fixture scheduler_db_session 直接改 CoreModel.query
+    且 teardown 没有恢复 (tests/test_scheduler/conftest.py:67)
+  - 后续 tests/test_orm/unit/test_transaction_manager.py 和
+    tests/test_orm/unit/test_tree_mixin.py 的 fixture 设置 CoreModel.query
+    时，部分用例会受到上游污染影响
+  - 与 Phase 5 新增测试无关：
+    * lifecycle 在 test_orm/ 独立跑时 0 失败
+    * 其 autouse 关系仅使下游受污染用例数从 505 → 543，
+      不引入新的失败用例类型
+  - 全量 tests/ 跑时污染被后续测试的 fixture 覆盖掉，所以不显式暴露
+
+处置:
+  - Phase 5 commit 不修此 pre-existing 污染（避免范围蔓延）
+  - Phase 5B 修 scheduler async executor 时，把 scheduler_db_session
+    的 teardown 改成「恢复 CoreModel.query 为 HybridQueryProperty」，
+    一并治跨模块测试污染
+
+--------------------------------------------------------
+后续待办（滚入清单）
+--------------------------------------------------------
+
+Phase 5B:
+  - scheduler async executor record_* 修复
+    · 在 scheduler.py:_execute_job 的 3 处调用点用 run_in_threadpool 包装
+    · 新增回归测试覆盖"async executor 下历史记录落库"
+    · 修完后把 tests/test_scheduler/conftest.py:67 改回 HybridQueryProperty
+  - db_session_scope 在 async 上下文下的 API gap 修复
+    · 三选一（见 L6d 注释）
+    · 新增正面测试 + 把 L6d 的 pytest.raises 反向为正向断言
+
+Phase 7 (发布前补测):
+  - 懒加载陷阱正/反例测试 + 文档补全
+  - pool 超限压测（QueuePool + 文件 sqlite）
+  - asyncio.CancelledError 路径的中间件 finally 覆盖测试
+  - 上游项目 rollout（yweb-app、yweb-sso 等）

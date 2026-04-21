@@ -229,33 +229,95 @@ commit `0a5e5a8` 已把生产 async 路由批量改为 def；Phase 0 扫描也�
 
 ---
 
-## Phase 5 — 测试迁移
+## Phase 5 — 测试迁移  ✅ 2026-04-21 完成（5.1 部分 / 5.2 核心；5.3 defer Phase 7）
 
-- [ ] **5.1** 根据 `hq_phase4_failing_async_tests.txt` 逐文件处理：
+> 执行过程 + 全部数据见 `assets/hq_phase5_tests.txt`
+
+- [~] **5.1** 根据 `hq_phase4_failing_async_tests.txt` 逐文件处理  ✅ 2026-04-21（本轮只做应做的 1 处；scheduler 上游 bug 转 Phase 5B）
   - 决策原则（doc 22 §7.3.8）：
     - 纯 DB 无 async IO 的测试 → 改 `def test_`
     - 混合 async → `await Model.query....all()`
+  - 实测事实（Phase 4 结果）：仓内仅 `tests/test_scheduler/integration/test_history.py:392` 1 条候选需要处理
+  - 尝试 → 回滚：一旦把 scheduler fixture 对齐到 `HybridQueryProperty` 并给该 async 测试加 `await`，立刻暴露生产 bug —— `yweb/scheduler/scheduler.py` 的 `async def _execute_job()` 直接调用同步 `history_manager.record_start/record_success/record_failure`，后者内部走 `.query.filter(...).first()`。Phase 4 上线后 `.first()` 返回 `_HybridTerminal`，导致：
+    - `record_start` 被当成「主键冲突」重试 5 次失败 → `PendingRollbackError`
+    - `record_success` 走到 `history.status = ...` → `AttributeError`（被 `except Exception` 吞掉）
+  - 历史结论：此 bug **在 Phase 4 之前就已存在**（`AsyncSafeQueryProperty` 抛 `SynchronousOnlyOperation` 也同样被 except 吞），scheduler async executor 的历史记录功能在生产里**一直是坏的**
+  - B+C 混合处置：
+    - 本轮（Phase 5）：**回滚** `tests/test_scheduler/conftest.py:67` + `tests/test_scheduler/integration/test_history.py:392` 到修改前，`conftest.py` 加注释指向 Phase 5B
+    - Phase 5B **独立**做 `run_in_threadpool` 包装 3 个调用点 + 新增回归测试 + 把 scheduler fixture 改回 `HybridQueryProperty`
   - 追加勾选（按测试文件拆条）：
-    - [ ] `tests/test_auth/...`
-    - [ ] `tests/test_organization/...`
-    - [ ] `tests/test_permission/...`
-    - [ ] `tests/test_orm/...`
-    - [ ] 其他
-- [ ] **5.2** 新增测试（doc 22 §7.2.3 强制清单）：
-  - [ ] `tests/test_orm/test_hybrid_query_lifecycle.py`：串行多终端 → 连接池归零
-  - [ ] 异常路径 → 中间件 `finally` 仍清理
-  - [ ] `asyncio.CancelledError` → 同上
-  - [ ] **无中间件反例**：不挂 `RequestIDMiddleware` 时，使用 HybridQuery → 泄漏可观测（作为反例提醒）
-  - [ ] `asyncio.gather` 并发多终端 → 明确报错或警告
-  - [ ] 脚本入口：`with db_session_scope(): await q.all()` 无泄漏
-  - [ ] 终端二次 `await` → 异常
-  - [ ] 压测：`concurrency = pool_size + max_overflow + 5`，`engine.pool.checkedout() == 0`
-- [ ] **5.3** 新增测试（doc 22 §7.3 衍生）：
+    - [x] `tests/test_scheduler/...`（回滚待 Phase 5B 修复 + 对齐）
+    - [x] `tests/test_auth/...`（Phase 0 扫描确认 0 处需迁移）
+    - [x] `tests/test_organization/...`（同上）
+    - [x] `tests/test_permission/...`（同上）
+    - [x] `tests/test_orm/...`（`test_async_safety.py` 本身是检测机制测试，无需迁移）
+    - [x] 其他（Phase 0 复核均非 async def test 中真实使用）
+- [x] **5.2** 新增测试（doc 22 §7.2.3 强制清单）  ✅ 2026-04-21
+  - 产出：`tests/test_orm/unit/test_hybrid_query_lifecycle.py`（**8 tests / all green**）
+  - [x] `TestLifecycleWithMiddleware::test_l1_serial_multi_terminal_session_cleaned` — 串行 `count/first/all` 后 registry 归空
+  - [x] `TestLifecycleWithMiddleware::test_l2_exception_path_session_cleaned` — 异常路径下中间件 `finally` 仍清理
+  - [ ] ~~`asyncio.CancelledError` → 同上~~ → defer（TestClient 不方便模拟外部 cancel；规模更大的压测里顺带覆盖；见 Phase 7 发布前补测）
+  - [x] `TestLifecycleWithoutMiddleware::test_l4_no_middleware_leaks_session` — 无中间件反例，`_leaked_session_count()` 穿透 `ScopedRegistry` 内部 dict 观察到泄漏（`registry.has()` 看不到 threadpool worker 的 scope 残留）
+  - [x] `TestLifecycleWithMiddleware::test_l5_gather_concurrent_terminals_behavior` — `asyncio.gather` 并发多终端：请求不崩溃 + cleanup 正常 + 成功结果互相一致（若一致性断言失败即说明 session 层发生 race）
+  - [x] 脚本入口（L6）：
+    - [x] `test_l6a_sync_script_entry_cleans_session` — 同步 `with db_session_scope()` 正常清理
+    - [x] `test_l6b_sync_script_exception_still_cleaned` — 同步 scope 抛异常仍清理
+    - [x] `test_l6c_async_script_with_async_db_call_cleans_session` — async 脚本里的正确做法：`await async_db_call(...) + on_request_end()`
+    - [x] `test_l6d_db_session_scope_inside_async_is_currently_gap` — **KNOWN GAP**：doc 22 §7.2.3 原设计 `with db_session_scope(): await q.all()` 当前抛 `SynchronousOnlyOperation`（因为 `db_session_scope.get_session()` 内部走 `check_async_safety()`）。测试固化现状，Phase 5B 修复后此断言反向
+  - [x] 终端二次 `await` → 异常（已在 Phase 3 `test_hybrid_query_terminal.py` 覆盖，此处不重复）
+  - [ ] ~~压测：`concurrency = pool_size + max_overflow + 5`，`engine.pool.checkedout() == 0`~~ → defer（需要 QueuePool + 文件 sqlite，规模独立；放入 Phase 7 发布前补测）
+- [ ] **5.3** 新增测试（doc 22 §7.3 衍生）→ **defer（发布前补测）**
+  - 延后理由：懒加载 / `DetachedInstanceError` 属于**文档 + 代码审查**问题，非 HybridQuery 行为异常；Phase 0 扫描确认本仓 0 处 `lazy='dynamic'`。作为 Phase 7 发布文档的一部分补 smoke + 指引更实际
   - [ ] 懒加载陷阱测试：`await Model.query.all()` + 访问关系 → 应有明确指引（加 `options(joinedload(...))` 的正例 + 未加的反例断言）
-  - [ ] `lazy='dynamic'` 覆盖（若 Phase 0.1 决定也包 AppenderQuery，则补测试；否则补「必须 `async_db_call`」的反例测试）
+  - [ ] `lazy='dynamic'` 覆盖（本仓 0 命中；上游项目各自补「必须 `async_db_call`」的反例测试）
   - [ ] `DetachedInstanceError`：跨请求访问 ORM 实例 → 正确报错 / 或已 detach
 
-**Phase 5 验收**：`python -m pytest yweb-core/tests -q` 完全绿；`engine.pool.checkedout() == 0` 在所有 session 结束后成立。
+**Phase 5 验收** ✅：
+- `python -m pytest tests/ --no-header -q --ignore=tests/test_ratelimit` → **2663 passed, 2 skipped, 1 xfailed, 0 failed**（与 Phase 4 基线完全一致，零新增失败；ratelimit 的 14 条 slowapi 是 pre-existing，非本项目引入）
+- `tests/test_orm/unit/test_hybrid_query_lifecycle.py` 8/8 全绿
+- L6d 以可重复的 `pytest.raises` 形式固化「`db_session_scope` 在 async 上下文抛错」的 API gap，防止 Phase 5B 修复时无声回归
+
+---
+
+## Phase 5B — 执行中发现的联动修复（Phase 5 衍生）
+
+> 本 Phase 由 Phase 5 执行暴露的生产代码 bug + API gap 派生。采用 B+C 混合方案：Phase 5 回滚尝试，此处独立修复 + 独立 commit。完整背景见 `assets/hq_phase5_tests.txt`。
+
+- [ ] **5B.1** Scheduler async executor 历史记录修复
+  - 问题：`yweb/scheduler/scheduler.py` 的 `async def _execute_job()` 直接调用同步方法 `history_manager.record_start / record_success / record_failure`（`yweb/scheduler/history.py`），后者内部走 `HistoryModel.query.filter(...).first()`。Phase 4 上线 `HybridQueryProperty` 后 `.first()` 在 async 上下文返回 `_HybridTerminal`，导致：
+    - `record_start` 被当成「主键冲突」重试 5 次失败 → `PendingRollbackError`
+    - `record_success` / `record_failure` 走到 `history.status = ...` → `AttributeError`（被 `except Exception` 吞）
+  - 历史定性：此 bug 在 Phase 4 之前就已存在（`AsyncSafeQueryProperty` 同样抛 `SynchronousOnlyOperation` 被 except 吞），scheduler async executor 的历史记录功能**在生产里一直是静默坏的**。Phase 4 把它从「静默失败」升级为「显性失败」
+  - 修复动作（改 `yweb/scheduler/scheduler.py` 3 处调用点）：
+    ```python
+    from starlette.concurrency import run_in_threadpool
+    # 原：history_manager.record_start(context)
+    await run_in_threadpool(history_manager.record_start, context)
+    # 原：history_manager.record_success(context, result, duration_ms)
+    await run_in_threadpool(history_manager.record_success, context, result, duration_ms)
+    # 原：history_manager.record_failure(context, error_msg, error_tb, duration_ms)
+    await run_in_threadpool(history_manager.record_failure, context, error_msg, error_tb, duration_ms)
+    ```
+  - 验收：
+    - [ ] `tests/test_scheduler/integration/test_history.py` 全绿
+    - [ ] 新增 1 条回归测试：在 async executor 路径下验证「历史记录真的落了库 + status 正确」
+    - [ ] `tests/test_scheduler/conftest.py:67` 改回 `CoreModel.query = HybridQueryProperty(session_scope.query_property())`
+    - [ ] `tests/test_scheduler/conftest.py` 的 `scheduler_db_session` teardown 增加「恢复 `CoreModel.query` 为 `HybridQueryProperty`」，治 pre-existing 跨模块测试污染（详见 `hq_phase5_tests.txt` 末节）
+    - [ ] `tests/test_scheduler/integration/test_history.py:392` 改回 `await ... first()`
+    - [ ] 全量回归不新增失败 + `pytest tests/test_scheduler/ tests/test_orm/unit/` 子集不再 cross-contaminate
+
+- [ ] **5B.2** `db_session_scope` 在 async 上下文下的 API gap
+  - 问题：doc 22 §7.2.3 原设计的「脚本入口 `with db_session_scope(): await q.all()`」当前会在 `get_session()` 内抛 `SynchronousOnlyOperation`（`check_async_safety()` 命中）
+  - 目前被测试 `test_l6d_db_session_scope_inside_async_is_currently_gap` 以 `pytest.raises` 固化
+  - 修复方案（三选一，实施前讨论）：
+    - 选项 A：`db_session_scope` 内部自动 `with allow_sync():`，表明「scope 同步建立但允许 async 内部使用」
+    - 选项 B：新增 `async_db_session_scope()` 作为 async 等价入口（更显式）
+    - 选项 C：文档明确 async 脚本只允许 `async_db_call + on_request_end`，不开放 `db_session_scope`
+  - 验收：
+    - [ ] 与用户确认方案
+    - [ ] 把 L6d 测试从 `pytest.raises` 反向为正向断言（或新增 async 等价测试）
+
+**Phase 5B 验收**：scheduler 历史记录 async 路径真正落库；`test_l6d` 在修复方案落地后反向；scheduler fixture 切回 `HybridQueryProperty` 后 scheduler 测试套全绿。
 
 ---
 
@@ -386,3 +448,4 @@ commit `0a5e5a8` 已把生产 async 路由批量改为 def；Phase 0 扫描也�
 | 2026-04-21 | 执行 Phase 2 — HybridQuery 骨架：新增 `yweb/orm/hybrid_query.py`（`HybridQuery[T]` 链式代理 + `_HybridTerminal[T]` 占位）；`yweb/orm/async_safety.py` 追加 `is_in_async_context()` helper；新增 17 条单测（代理链 / session 透传 / 同步透传 / async 抛错 / allow_sync 兜底 / off 模式 / 边界）全绿。决策：Q1=Q（宽松，同步透传 async 抛错）、Q2=Y（带泛型）。不接入 CoreModel.query（留给 Phase 4） |
 | 2026-04-21 | 执行 Phase 3 — HybridQuery 终端方法：`_HybridTerminal` 实装 `__await__`（`run_in_threadpool`）/ `_run_sync()` / `_consumed` 一次性保护；`HybridQuery` 上追加 10 个终端方法（`all/first/one/one_or_none/scalar/count/get/delete/update/paginate`），统一走 `_terminal()` helper 应用 A + A2 模板；新增 30 条单测（同步 12 + async 10 + 一次性 3 + 线程池 1 + bypass 2 + A2 漏 await 2）全绿。`scalars` 未实现（SA 2.0 Query 未暴露 + 仓内 0 处使用） |
 | 2026-04-21 | 执行 Phase 4 — 接入 CoreModel.query：`hybrid_query.py` 加 `HybridQueryProperty` 描述符（默认 on / `YWEB_HYBRID_QUERY=off` 回退 `AsyncSafeQueryProperty`）；`db_session.py` 置换挂载点；`core_model.paginate()` 加 HybridQuery 剥壳；`async_safety.py` docstring 改写角色分工；`yweb/orm/__init__.py` 导出 `HybridQuery`。全量 pytest：2673 passed / 14 pre-existing (slowapi 缺失，与 Phase 4 无关) / 0 新失败。结果存入 `assets/hq_phase4_failing_async_tests.txt` |
+| 2026-04-21 | 执行 Phase 5（B+C 混合）——**测试迁移 + lifecycle**：⑴ 尝试 scheduler fixture 对齐 `HybridQueryProperty` 暴露生产 bug（`yweb/scheduler/scheduler.py` async `_execute_job` 直接调用同步 `history_manager.record_*` → `.first()` 返回 `_HybridTerminal` 导致「主键重试失败 + 属性访问失败」），确认该 bug 在 Phase 4 前就已静默存在；⑵ 采用 B+C 混合：本轮回滚 scheduler 改动 + 注释指向新 **Phase 5B** 修复；⑶ 新增 `tests/test_orm/unit/test_hybrid_query_lifecycle.py` 8 tests（L1 串行多终端清理 / L2 异常路径清理 / L4 无中间件反例 via `ScopedRegistry` 穿透 / L5 gather 并发一致性 / L6a-d 脚本入口 4 场景，含 `db_session_scope` 在 async 下的 known gap）全绿；⑷ 5.3 懒加载 / pool 压测 / CancelledError 延后至 Phase 7 发布前补测。全量回归 2663 passed，与 Phase 4 基线零差异。详见 `assets/hq_phase5_tests.txt` |

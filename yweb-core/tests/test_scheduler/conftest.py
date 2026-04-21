@@ -64,6 +64,11 @@ def scheduler_db_session(scheduler_engine, scheduler_models):
     session_scope = scoped_session(SessionLocal, scopefunc=lambda: 0)
     
     # 设置 CoreModel.query
+    # 注意：此处暂未用 HybridQueryProperty 包装，因为 scheduler 生产代码
+    # （yweb/scheduler/history.py 中的 record_start/record_success/record_failure）
+    # 在 async 上下文下直接调用同步 .query.first()，Phase 4 上线 HybridQuery 后
+    # 会返回 _HybridTerminal 导致 record_* 全部失败。
+    # 该问题已记入 23 号清单 Phase 5B，修复后此处将改回 HybridQueryProperty 包装。
     CoreModel.query = session_scope.query_property()
     
     yield session_scope()
