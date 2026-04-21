@@ -52,7 +52,7 @@
 | 文档 | 说明 |
 |------|------|
 | [22_HybridQuery 同步异步统一查询（重构设计）](22_hybrid_query_sync_async_refactor.md) | HybridQuery 方案、流程图、重构前后对比 PNG、`query.session` 兼容与实施清单 |
-| [23_HybridQuery 重构 · 可执行清单](23_hybrid_query_execution_checklist.md) | 基于 22 号的 Phase 0–8 可勾选执行项；设计决策 D1/D2/D3/D5 记录；含 `run_db → async_db_call` 改名方案 |
+| [23_HybridQuery 重构 · 可执行清单](23_hybrid_query_execution_checklist.md) | 基于 22 号的 Phase 0–8 可勾选执行项；设计决策 D1/D2/D3/D5 记录；含 `async_db_call → async_db_call` 改名方案 |
 
 ## 功能清单
 
@@ -62,7 +62,7 @@
 yweb/orm/
 ├── core_model.py           # 核心ORM模型类（CRUD、分页等）
 ├── base_model.py           # 业务模型基类（继承CoreModel）
-├── db_session.py           # 数据库会话管理、run_db()
+├── db_session.py           # 数据库会话管理、async_db_call()
 ├── hybrid_query.py         # （规划中）HybridQuery：await 终端查询与 sync 同源 API
 ├── async_safety.py         # 异步安全检测（SynchronousOnlyOperation）
 ├── history.py              # 版本历史记录
@@ -91,7 +91,7 @@ yweb/orm/
 | **序列化** | to_dict、关联序列化 | ✅ 完整实现 |
 | **值对象嵌入** | OwnsOne、OwnedType、嵌套/平铺序列化 | ✅ 完整实现 |
 | **会话管理** | scoped_session、依赖注入 | ✅ 完整实现 |
-| **异步安全** | async 上下文检测、run_db()、SynchronousOnlyOperation | ✅ 完整实现 |
+| **异步安全** | async 上下文检测、async_db_call()、SynchronousOnlyOperation | ✅ 完整实现 |
 
 ## 快速开始
 

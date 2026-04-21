@@ -95,7 +95,7 @@ ORM 基于同步 SQLAlchemy Session，在 `async def` 中直接调用会阻塞�
 | 场景 | 写法 | 安全 |
 |------|------|------|
 | 纯 DB 操作路由 | `def get_users():` | ✅ FastAPI 自动放线程池 |
-| 混合异步 + DB | `async def` + `await run_db(...)` | ✅ 手动放线程池 |
+| 混合异步 + DB | `async def` + `await async_db_call(...)` | ✅ 手动放线程池 |
 | `async def` 直接调 ORM | `async def` + `User.query.all()` | ❌ **禁止** |
 | 启动/lifespan | `with allow_sync():` | ✅ 临时豁免 |
 
@@ -105,12 +105,12 @@ ORM 基于同步 SQLAlchemy Session，在 `async def` 中直接调用会阻塞�
 def get_users():
     return User.query.all()
 
-# ✅ 混合场景用 run_db
-from yweb.orm import run_db
+# ✅ 混合场景用 async_db_call
+from yweb.orm import async_db_call
 
 @router.get("/users")
 async def get_users():
-    users = await run_db(User.get_all)
+    users = await async_db_call(User.get_all)
     extra = await some_async_call()
     return {"users": users, "extra": extra}
 

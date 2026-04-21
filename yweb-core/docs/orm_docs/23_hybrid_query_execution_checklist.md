@@ -46,7 +46,7 @@ Phase 0 → Phase 1 → Phase 2 → ... → Phase 7
 - [ ] **0.1** 扫描 `lazy='dynamic'` 的关系（doc 22 §7.3.5）
   - 命令：`rg "lazy=['\"]dynamic['\"]" yweb-core/yweb`
   - 产出：`docs/orm_docs/assets/hq_scan_lazy_dynamic.txt`（列出所有命中）
-  - 决策：对每一个命中标注「HybridQuery 也包 AppenderQuery」或「文档禁用、async 走 run_db」
+  - 决策：对每一个命中标注「HybridQuery 也包 AppenderQuery」或「文档禁用、async 走 async_db_call」
 - [ ] **0.2** 扫描 `isinstance(x, Query)` / `type(x) is Query`
   - 命令：`rg "isinstance\([^,]+,\s*Query\)" yweb-core`
   - 产出：`assets/hq_scan_isinstance_query.txt`
@@ -153,7 +153,7 @@ Phase 0 → Phase 1 → Phase 2 → ... → Phase 7
   - [ ] 线程池回合内**只做单次**「构建好的 sync Query 的一次执行」，不触发额外关系访问（doc 22 §7.3.1）
   - [ ] 不做 `session.commit()`（doc 22 §7.3.6）
 
-**Phase 3 验收**：`hybrid_query.py` 单元测试 100% 通过；`paginate` 与 `run_db` 结果完全一致；一次性语义有测试兜底。
+**Phase 3 验收**：`hybrid_query.py` 单元测试 100% 通过；`paginate` 与 `async_db_call` 结果完全一致；一次性语义有测试兜底。
 
 ---
 
@@ -212,7 +212,7 @@ Phase 0 → Phase 1 → Phase 2 → ... → Phase 7
   - [ ] 压测：`concurrency = pool_size + max_overflow + 5`，`engine.pool.checkedout() == 0`
 - [ ] **5.3** 新增测试（doc 22 §7.3 衍生）：
   - [ ] 懒加载陷阱测试：`await Model.query.all()` + 访问关系 → 应有明确指引（加 `options(joinedload(...))` 的正例 + 未加的反例断言）
-  - [ ] `lazy='dynamic'` 覆盖（若 Phase 0.1 决定也包 AppenderQuery，则补测试；否则补「必须 `run_db`」的反例测试）
+  - [ ] `lazy='dynamic'` 覆盖（若 Phase 0.1 决定也包 AppenderQuery，则补测试；否则补「必须 `async_db_call`」的反例测试）
   - [ ] `DetachedInstanceError`：跨请求访问 ORM 实例 → 正确报错 / 或已 detach
 
 **Phase 5 验收**：`python -m pytest yweb-core/tests -q` 完全绿；`engine.pool.checkedout() == 0` 在所有 session 结束后成立。
@@ -223,12 +223,12 @@ Phase 0 → Phase 1 → Phase 2 → ... → Phase 7
 
 - [ ] **6.1** `docs/03_orm_guide.md`：新增 HybridQuery 章节 / 更新「async 中的 ORM」段落
 - [ ] **6.2** `docs/orm_docs/12_db_session.md`：`allow_sync` / `check_async_safety` 语义变更
-- [ ] **6.3** `docs/orm_docs/15_fastapi_integration.md`：把 `run_db` 推荐示例升级为「读用 `await Model.query`、写用 `run_db`」
+- [ ] **6.3** `docs/orm_docs/15_fastapi_integration.md`：把 `async_db_call` 推荐示例升级为「读用 `await Model.query`、写用 `async_db_call`」
 - [ ] **6.4** `docs/orm_docs/README.md`：索引加入 22 / 23 / （可能的 24）
 - [ ] **6.5** 删除 / 改写 `docs/ASYNC_SYNC_ORM_GUIDE.md`
   - 决策：保留为历史方案说明 / 或改为指向 22 / 23 的精简导览
 - [ ] **6.6** `README_DEV.md`：开发入口更新
-- [ ] **6.7** `.cursor/rules/yweb-orm.mdc` / `.cursor/skills/yweb-orm/SKILL.md`：把 `run_db` 独占地位改为「读用 HybridQuery，写用 run_db」
+- [ ] **6.7** `.cursor/rules/yweb-orm.mdc` / `.cursor/skills/yweb-orm/SKILL.md`：把 `async_db_call` 独占地位改为「读用 HybridQuery，写用 async_db_call」
 
 **Phase 6 验收**：文档 lint 无错；用户 onboarding 能一次读完就知道怎么写 async 路由。
 
@@ -244,7 +244,7 @@ Phase 0 → Phase 1 → Phase 2 → ... → Phase 7
   - 决策记录：`[ ] 最终方案 = ___________________`
 - [ ] **7.4** 迁移指南：上游项目（如 `y-sso-system`）升级 yweb 时的 5 分钟迁移步骤
   - [ ] 检查 async 路由：`rg -U "async def \w+.*\n.*\.query\." <project>`
-  - [ ] 每处判定「加 `await` / 改 `def` / `await run_db`」
+  - [ ] 每处判定「加 `await` / 改 `def` / `await async_db_call`」
   - [ ] 回归跑上游测试
 
 **Phase 7 验收**：发布后 24h 无 P0；上游项目按指南升级一次性通过。
@@ -261,20 +261,20 @@ Phase 0 → Phase 1 → Phase 2 → ... → Phase 7
   - 验收：新增测试独立目录可定位（例如 `tests/test_orm/unit/test_hybrid_query_*.py` 与 `tests/test_orm/integration/test_hybrid_query_lifecycle.py`）
 
 - [ ] **8.2** 更新异步查询使用文档（交叉 Phase 6）
-  - `.cursor/rules/yweb-orm.mdc`：把「async 里必须 `run_db`」改为「**读用 `await Model.query...`；写用 `<新名>` 或 `def` 路由**」；补「禁止隐式终端 `for/[]/bool`」
+  - `.cursor/rules/yweb-orm.mdc`：把「async 里必须 `async_db_call`」改为「**读用 `await Model.query...`；写用 `async_db_call` 或 `def` 路由**」；补「禁止隐式终端 `for/[]/bool`」
   - `.cursor/skills/yweb-orm/SKILL.md`：同步更新示例代码段
   - `docs/03_orm_guide.md` / `docs/orm_docs/12_db_session.md` / `15_fastapi_integration.md`：新增 / 改写「async 中的 ORM」章节
-  - 验收：`rg "run_db" .cursor docs` 的命中全部解释清楚新旧关系（不是裸用）
+  - 验收：`rg "run_db" .cursor docs` 的命中全部解释清楚新旧关系（不是裸用）；`rg "\basync_db_call\b" .cursor docs` 应是默认示例名
 
 - [ ] **8.3** 扫描并分类 async 使用点（延伸 Phase 0.4）
   - 目标：所有 `async def` 路由 + `async def test_` + 其他 `async def` 协程
   - 每处判定归类：
     - `[A]` 已 `await Model.query...`：无需改
     - `[B]` 同步 `Model.query...`：需加 `await` 或改 `def`
-    - `[C]` 用 `run_db(...)`：评估是否可改为 `await Model.query...`
-    - `[D]` 直接 `db_manager.get_session()`：写路径，必须 `<新名>` 包装
+    - `[C]` 用 `async_db_call(...)`（或旧名 `run_db(...)`）：评估是否可改为 `await Model.query...`
+    - `[D]` 直接 `db_manager.get_session()`：写路径，必须 `async_db_call` 包装
   - 产出：`docs/orm_docs/assets/hq_scan_async_call_sites.md`（分类表）
-  - 依赖：需要先拿到 D5（run_db 新名）
+  - 依赖：D5（`run_db` → `async_db_call`）已锁定并实施（见 8.5）
 
 - [ ] **8.4** 清理 HybridQuery 相关 TODO
   - 动作：`rg "TODO.*(HybridQuery|run_db|async.*query|AsyncSafeQueryProperty)" yweb tests`
@@ -282,7 +282,7 @@ Phase 0 → Phase 1 → Phase 2 → ... → Phase 7
   - 本清单内的 `[ ] 最终方案 = ___________________` 占位符也要在决策后更新
   - 验收：剩余 TODO 要么被删，要么有跟踪单号
 
-- [ ] **8.5** `run_db` 改名（D5）
+- [x] **8.5** `run_db` 改名（D5）✅ 2026-04-21 完成
   - **当前名**：`run_db`（`yweb/orm/db_session.py`，`from starlette.concurrency import run_in_threadpool` 的 ORM 专用薄包装）
   - **决策**：`D5 = async_db_call`  ✅ 2026-04-20 锁定
   - 命名理由（供 reviewer 理解）：
@@ -290,18 +290,19 @@ Phase 0 → Phase 1 → Phase 2 → ... → Phase 7
     - `async` + `db` + `call` 三要素齐，调用方不需查文档即可理解
     - 读/写两种 DB 操作均可用（避免 `async_query` 只暗示 SELECT 的歧义）
     - 与 `run_db` 字面零重叠，`rg "\brun_db\b"` 能干净定位所有老代码
-  - 实施：
-    - [ ] 在 `db_session.py` 里把 `run_db` 重命名为 `async_db_call`；**保留** `run_db` 作为 `@deprecated` 别名一个发布周期（`run_db = async_db_call`），调用时打 `DeprecationWarning`
-    - [ ] 全仓替换：`rg "\brun_db\b" yweb tests examples` 逐处改新名（除 alias 定义本身）
-    - [ ] `yweb/orm/__init__.py` 对外 export `async_db_call` + 保留 `run_db`（deprecated）
-    - [ ] docstring 示例全部改用 `async_db_call`
-    - [ ] `CHANGELOG` 标注 breaking-soon：`run_db` 将于下一版本移除
-  - 验收：`rg "\brun_db\b" yweb tests examples` 仅剩 alias 定义 + changelog 提及
+  - 实施（commit `ff97dc6`）：
+    - [x] 在 `db_session.py` 里把 `run_db` 重命名为 `async_db_call`；**保留** `run_db` 作为 `@deprecated` 别名一个发布周期（独立函数转发 + `DeprecationWarning`，而非赋值别名，便于 `is not` 区分）
+    - [x] 全仓替换：`yweb/orm/**` 与 `tests/test_orm/unit/test_async_safety.py` 逐处改新名
+    - [x] `yweb/orm/__init__.py` 对外 export `async_db_call` + 保留 `run_db`（deprecated）
+    - [x] docstring 示例、`async_safety.py` 错误提示文本全部改用 `async_db_call`
+    - [x] 补测试 `TestRunDbDeprecatedAlias`：旧名仍能工作 + 发出 DeprecationWarning
+    - [ ] `CHANGELOG` 标注 breaking-soon：`run_db` 将于下一版本移除（待在下一次发版前补）
+  - 验收：生产代码 `rg "\brun_db\b" yweb` 仅剩 alias 定义 / docstring 迁移提示 / `__all__` 标注；17/17 测试通过
 
 - [ ] **8.6** 更新 README（交叉 Phase 6.6）
   - `yweb-core/README_DEV.md`：
     - async 路由最佳实践段落
-    - `run_db` → `<新名>` 迁移说明
+    - `run_db` → `async_db_call` 迁移说明
     - HybridQuery 一行介绍 + 链到 doc 22 / 23
   - 根 `README.md`（如有面向用户部分）同步
   - 验收：README 读完即可写出正确的 async ORM 代码
@@ -328,3 +329,8 @@ Phase 0 → Phase 1 → Phase 2 → ... → Phase 7
 | 2026-04-20 | 初版：基于 22 号文档提取 Phase 0–7 可执行项；并入 auth 时区 bug 作为 Phase 1 阻塞项 |
 | 2026-04-20 | 锁定设计决策 D1/D2/D3（全部 A）；新增 Phase 8 收尾补充项：测试补写 / 文档更新 / async 扫描分类 / TODO 清理 / run_db 改名（D5 待定）/ README 更新 / 上游项目迁移 |
 | 2026-04-20 | 锁定 D5：`run_db` → `async_db_call`（保留旧名 deprecated alias） |
+| 2026-04-21 | 执行 Phase 1：`fix(auth) 8b1b81a` 修复 `mixins.py` 时区比较 bug（含 `_as_utc` + 11 个回归测试） |
+| 2026-04-21 | 执行 async-safety 代码落地：`feat(orm) b1434c5` 核心 + `refactor(auth,org,examples) 0a5e5a8` 路由适配 |
+| 2026-04-21 | 顺带修复 `fix(auth) 8743d1a`：OIDC userinfo 路由方法名+参数与真实 OidcManager 对齐（含两个测试 mock 同步） |
+| 2026-04-21 | 独立新增 `feat(auth) 7e5f887`：JWTManager 支持自定义 `kid` header（JWKS 场景） |
+| 2026-04-21 | 执行 Phase 8.5 代码部分：`refactor(orm)! ff97dc6` `run_db` → `async_db_call`；保留 `run_db` 作为 deprecated alias 并新增 3 个 alias 测试 |

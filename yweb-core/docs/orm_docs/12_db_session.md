@@ -532,7 +532,7 @@ async def async_task(session):
 ```
 
 > **注意**：`@with_db_session()` 装饰器内部管理 session 的生命周期和线程上下文。
-> 这与 FastAPI 路由不同——在 FastAPI 路由中，应使用 `def` 路由或 `run_db()` 包装。
+> 这与 FastAPI 路由不同——在 FastAPI 路由中，应使用 `def` 路由或 `async_db_call()` 包装。
 
 #### 参数说明
 
@@ -598,35 +598,35 @@ def list_users():
     return User.query.all()  # 安全！在线程池中执行
 ```
 
-**方式 2：使用 `run_db()` 包装**
+**方式 2：使用 `async_db_call()` 包装**
 
 当路由需要混合使用异步 I/O 和同步 ORM 时：
 
 ```python
-from yweb.orm import run_db
+from yweb.orm import async_db_call
 
-# ✅ async def + run_db()，同步调用在线程池中执行
+# ✅ async def + async_db_call()，同步调用在线程池中执行
 @app.get("/users")
 async def list_users():
-    users = await run_db(User.get_all)
+    users = await async_db_call(User.get_all)
     extra = await some_async_http_call()
     return {"users": users, "extra": extra}
 
 # 支持 lambda 包裹复杂查询
 @app.get("/active-users")
 async def get_active_users():
-    users = await run_db(
+    users = await async_db_call(
         lambda: User.query.filter_by(is_active=True).all()
     )
     return users
 ```
 
-### run_db() API
+### async_db_call() API
 
 ```python
-from yweb.orm import run_db
+from yweb.orm import async_db_call
 
-result = await run_db(func, *args, **kwargs)
+result = await async_db_call(func, *args, **kwargs)
 ```
 
 | 参数 | 说明 |
@@ -636,14 +636,14 @@ result = await run_db(func, *args, **kwargs)
 | `**kwargs` | 传给 func 的关键字参数 |
 
 内部通过 Starlette 的 `run_in_threadpool` 将同步调用移交到线程池，
-`ContextVar`（request_id）会自动传递，因此同一请求内的多次 `run_db()` 调用共享同一个 Session。
+`ContextVar`（request_id）会自动传递，因此同一请求内的多次 `async_db_call()` 调用共享同一个 Session。
 
 ### 场景选择指南
 
 | 场景 | 推荐方式 | 原因 |
 |------|----------|------|
 | 纯数据库操作 | `def` 路由 | 最简单，FastAPI 自动线程池 |
-| 混合 async I/O + DB | `async def` + `run_db()` | 保持异步 I/O 优势 |
+| 混合 async I/O + DB | `async def` + `async_db_call()` | 保持异步 I/O 优势 |
 | 脚本/定时任务 | `db_session_scope()` / `@with_db_session` | 非 HTTP 场景 |
 | 测试代码 | 直接调用（非 async 上下文） | 检测自动放行 |
 
@@ -793,10 +793,10 @@ async def list_users():
 def list_users():
     return User.query.all()
 
-# ✅ 方式2：使用 run_db()
+# ✅ 方式2：使用 async_db_call()
 @app.get("/users")
 async def list_users():
-    return await run_db(User.get_all)
+    return await async_db_call(User.get_all)
 ```
 
 如需临时禁用检测（不推荐），设置环境变量 `YWEB_ASYNC_SAFETY=off`。

@@ -422,7 +422,7 @@ logging.getLogger("sqlalchemy.engine").setLevel(logging.INFO)
 
 ```python
 # 导入 ORM 相关
-from yweb.orm import BaseModel, init_database, get_db, run_db
+from yweb.orm import BaseModel, init_database, get_db, async_db_call
 
 # 导入响应相关
 from yweb.response import OK, BadRequest, NotFound
@@ -448,12 +448,12 @@ ORM 基于同步 Session，在 `async def` 路由中直接调用会阻塞事件�
 def list_users():
     return User.query.all()
 
-# ✅ 混合 async I/O：使用 run_db() 包装
-from yweb.orm import run_db
+# ✅ 混合 async I/O：使用 async_db_call() 包装
+from yweb.orm import async_db_call
 
 @app.get("/users")
 async def list_users():
-    users = await run_db(User.get_all)
+    users = await async_db_call(User.get_all)
     extra = await some_async_call()
     return {"users": users, "extra": extra}
 

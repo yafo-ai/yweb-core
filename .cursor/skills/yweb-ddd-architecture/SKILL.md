@@ -56,7 +56,7 @@ API 层 (路由) → Service 层 (业务编排) → Domain 层 (领域模型)
 ORM 是同步的，路由声明方式直接影响并发性能：
 
 - **纯 DB 操作**：路由用 `def`（推荐），FastAPI 自动放线程池
-- **混合异步 + DB**：路由用 `async def`，DB 调用用 `await run_db(...)` 包装
+- **混合异步 + DB**：路由用 `async def`，DB 调用用 `await async_db_call(...)` 包装
 - **禁止**：`async def` 中直接调用 `Model.query` / `Model.get()` 等同步 ORM，会触发 `SynchronousOnlyOperation`
 
 ```python
@@ -65,10 +65,10 @@ ORM 是同步的，路由声明方式直接影响并发性能：
 def get_users():
     return User.query.all()
 
-# ✅ async def + run_db
+# ✅ async def + async_db_call
 @router.get("/users")
 async def get_users():
-    users = await run_db(User.get_all)
+    users = await async_db_call(User.get_all)
     extra = await some_async_call()
     return {"users": users, "extra": extra}
 ```

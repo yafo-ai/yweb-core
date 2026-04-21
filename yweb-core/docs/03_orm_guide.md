@@ -1151,7 +1151,7 @@ with ThreadPoolExecutor(max_workers=5) as executor:
 | 场景 | 推荐方式 |
 |-----|---------|
 | FastAPI `def` 路由（纯 DB） | `RequestIDMiddleware` 或 `Depends(get_db)` |
-| FastAPI `async def` 路由（混合 I/O） | `await run_db(...)` 包装同步 ORM 调用 |
+| FastAPI `async def` 路由（混合 I/O） | `await async_db_call(...)` 包装同步 ORM 调用 |
 | 脚本/定时任务 | `db_session_scope()` 或 `@with_db_session()` |
 | 线程池任务 | `db_session_scope()` 或 `@with_db_session()` |
 
@@ -1273,7 +1273,7 @@ def set_tenant_id(mapper, connection, target):
 | `@with_db_session()` | session 装饰器 |
 | `on_request_end()` | 清理 session |
 | `db_manager._set_request_id()` | 设置请求 ID（内部 API） |
-| `await run_db(func, ...)` | 在线程池中执行同步 DB 操作（async def 路由用） |
+| `await async_db_call(func, ...)` | 在线程池中执行同步 DB 操作（async def 路由用） |
 
 ### 异步安全
 

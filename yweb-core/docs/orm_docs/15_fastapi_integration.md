@@ -65,7 +65,7 @@ YWeb ORM 基于 SQLAlchemy 同步 Session。路由函数的声明方式直接影
 |----------|----------|---------|------|
 | `def` | 直接调用 | ✅ 安全 | FastAPI 自动放入线程池 |
 | `async def` | 直接调用 | ❌ 阻塞 | 阻塞事件循环，触发 `SynchronousOnlyOperation` |
-| `async def` | `await run_db(...)` | ✅ 安全 | 手动放入线程池 |
+| `async def` | `await async_db_call(...)` | ✅ 安全 | 手动放入线程池 |
 
 ### 推荐：使用 def 路由（纯数据库操作）
 
@@ -84,17 +84,17 @@ def create_user(data: UserCreate):
     return user
 ```
 
-### 混合场景：async def + run_db()
+### 混合场景：async def + async_db_call()
 
 当路由需要同时使用异步 I/O 和数据库操作时：
 
 ```python
-from yweb.orm import run_db
+from yweb.orm import async_db_call
 
 @app.get("/users")
 async def list_users():
     # 数据库操作放入线程池
-    users = await run_db(User.get_all)
+    users = await async_db_call(User.get_all)
     # 异步 HTTP 调用保持异步
     extra = await some_async_http_call()
     return {"users": users, "extra": extra}
@@ -102,7 +102,7 @@ async def list_users():
 # 支持 lambda 包裹复杂查询
 @app.get("/active-users")
 async def get_active_users():
-    users = await run_db(
+    users = await async_db_call(
         lambda: User.query.filter_by(is_active=True).all()
     )
     return users
@@ -479,10 +479,10 @@ async def db_session_middleware(request: Request, call_next):
 def list_users():
     return User.query.all()
 
-# ✅ 推荐：混合 async I/O 使用 async def + run_db
+# ✅ 推荐：混合 async I/O 使用 async def + async_db_call
 @app.get("/users")
 async def list_users():
-    users = await run_db(User.get_all)
+    users = await async_db_call(User.get_all)
     extra = await some_async_call()
     return {"users": users, "extra": extra}
 
