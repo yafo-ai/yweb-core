@@ -11,6 +11,26 @@
 - db_session_scope(): 非 HTTP 场景的上下文管理器
 - with_db_session(): 装饰器方式管理 session
 - on_request_end(): 请求结束清理
+- run_db(): 在 async def 路由中安全执行同步 DB 操作
+
+异步路由使用指南:
+
+    ORM 层基于同步 Session，在 async def 路由中直接调用会阻塞事件循环。
+    推荐以下两种方式：
+
+    方式1（推荐）—— 使用 def 路由，FastAPI 自动放入线程池::
+
+        @app.get("/users")
+        def get_users(db: Session = Depends(get_db)):
+            return User.query.all()
+
+    方式2 —— 需要混合 async I/O 时，使用 run_db()::
+
+        @app.get("/users")
+        async def get_users():
+            users = await run_db(User.get_all)
+            extra = await some_async_http_call()
+            return {"users": users, "extra": extra}
 
 内部 API（不建议外部使用）:
 - db_manager.get_session(): 获取 scoped session（低级）
@@ -47,6 +67,8 @@ __all__ = [
     'db_session_scope',
     'with_db_session',
     'on_request_end',
+    # 异步支持
+    'run_db',
 ]
 
 
@@ -317,8 +339,10 @@ class DatabaseManager:
         # 自动设置 ORM query 属性（延迟导入避免循环依赖）
         if auto_setup_query:
             from .core_model import CoreModel
-            CoreModel.query = self._session_scope.query_property()
-            logger.info("CoreModel.query 属性已自动设置")
+            from .async_safety import AsyncSafeQueryProperty
+            raw_query_property = self._session_scope.query_property()
+            CoreModel.query = AsyncSafeQueryProperty(raw_query_property)
+            logger.info("CoreModel.query 属性已自动设置（含 async 安全检测）")
         
         logger.info("数据库session创建成功")
         
@@ -356,6 +380,9 @@ class DatabaseManager:
         """
         if self._session_scope is None:
             raise RuntimeError("数据库未初始化，请先调用 init_database()")
+        
+        from .async_safety import check_async_safety
+        check_async_safety()
         
         session = self._session_scope()
         
@@ -687,3 +714,48 @@ def with_db_session(
         return sync_wrapper
     
     return decorator
+
+
+async def run_db(func: Callable[..., T], *args, **kwargs) -> T:
+    """在线程池中执行同步数据库操作，避免阻塞事件循环
+
+    当你需要在 async def 路由中调用同步的 ORM 操作时使用此函数。
+    内部通过 Starlette 的 run_in_threadpool 将同步调用移交到线程池执行。
+
+    .. note::
+        如果路由不涉及其他 async I/O，推荐直接使用 ``def`` 路由——
+        FastAPI 会自动将同步路由放入线程池，无需手动包裹。
+
+    Args:
+        func: 同步的可调用对象（函数或 lambda）
+        *args: 传给 func 的位置参数
+        **kwargs: 传给 func 的关键字参数
+
+    Returns:
+        func 的返回值
+
+    使用示例::
+
+        from yweb.orm import run_db
+
+        @app.get("/users")
+        async def get_users():
+            users = await run_db(User.get_all)
+            return users
+
+        @app.get("/user/{user_id}")
+        async def get_user(user_id: int):
+            user = await run_db(User.get, user_id)
+            extra = await some_async_http_call(user.id)
+            return {"user": user.to_dict(), "extra": extra}
+
+        # 也支持 lambda 包裹更复杂的查询
+        @app.get("/active-users")
+        async def get_active_users():
+            users = await run_db(
+                lambda: User.query.filter_by(is_active=True).all()
+            )
+            return [u.to_dict() for u in users]
+    """
+    from starlette.concurrency import run_in_threadpool
+    return await run_in_threadpool(func, *args, **kwargs)

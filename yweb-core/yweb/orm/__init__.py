@@ -6,6 +6,7 @@
 - DTO: 数据传输对象基类
 - BaseSchemas: Pydantic Schema基类
 - 数据库会话管理
+- 异步安全检测（防止 async 上下文中阻塞事件循环）
 - 软删除扩展
 - 树形结构扩展
 
@@ -18,21 +19,29 @@
     # 激活软删除钩子
     activate_soft_delete_hook()
     
-    # 定义普通模型（有CRUD、软删除、分页等功能）
+    # 定义模型
     class User(BaseModel):
         __tablename__ = 'user'
         email = Column(String(255))
     
-    # 定义带历史记录的模型（推荐方式：BaseModel） : enable_history=True
-    class Document(BaseModel):
-        enable_history=True
-        __tablename__ = 'document'
-        title = Column(String(200))
-    
-    # 在路由中使用
+    # 在路由中使用（纯 DB 操作推荐 def 路由）
     @app.get("/users")
     def get_users(db: Session = Depends(get_db)):
         return User.query.all()
+    
+    # 混合 async I/O 时使用 run_db()
+    from yweb.orm import run_db
+    
+    @app.get("/users")
+    async def get_users():
+        users = await run_db(User.get_all)
+        extra = await some_async_call()
+        return {"users": users, "extra": extra}
+
+异步安全:
+    ORM 基于同步 Session，在 async def 中直接调用会阻塞事件循环。
+    框架内置检测机制，会抛出 SynchronousOnlyOperation 异常并给出修复指引。
+    通过环境变量 YWEB_ASYNC_SAFETY 控制行为：error（默认）/ warn / off。
 """
 
 from .base_dto import DTO
@@ -57,6 +66,15 @@ from .db_session import (
     on_request_end,
     db_session_scope,
     with_db_session,
+    # 异步支持
+    run_db,
+)
+
+# 异步安全检测
+from .async_safety import (
+    SynchronousOnlyOperation,
+    check_async_safety,
+    allow_sync,
 )
 
 # 软删除扩展
@@ -244,6 +262,12 @@ __all__ = [
     "on_request_end",
     "db_session_scope",
     "with_db_session",
+    
+    # Async Support
+    "run_db",
+    "SynchronousOnlyOperation",
+    "check_async_safety",
+    "allow_sync",
     
     # Soft Delete Extensions
     "IgnoredTable",
