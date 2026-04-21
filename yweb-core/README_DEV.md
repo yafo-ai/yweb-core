@@ -466,6 +466,49 @@ async def list_users():
 通过环境变量 `YWEB_ASYNC_SAFETY` 控制检测行为：`error`（默认）/ `warn` / `off`。
 详见 [数据库会话文档](docs/orm_docs/12_db_session.md) 的「异步路由与同步 ORM」章节。
 
+#### 命名变更：`run_db` → `async_db_call`
+
+`run_db` 已在 2026-04 重命名为 `async_db_call`（语义等价：在 async 路由中把同步 DB 操作放进线程池执行）。
+旧名 `run_db` 保留为 **deprecated alias**，调用时会发出 `DeprecationWarning`，将在下一个版本移除。
+
+```python
+from yweb.orm import async_db_call  # 新名，推荐
+
+users = await async_db_call(lambda: User.query.filter_by(is_active=True).all())
+
+from yweb.orm import run_db  # 仍可 import，但会警告
+```
+
+上游项目（如 `y-sso-system`）升级 yweb 时的迁移步骤：
+
+```bash
+# 1. 扫描命中
+rg "\brun_db\b" <your-project>
+
+# 2. 逐处替换为 async_db_call（语义一致）
+# 3. 跑回归测试
+```
+
+#### 未来方向：HybridQuery
+
+当前方案的两个已知不足：
+1. 读写都必须显式包装成 `async_db_call(lambda: ...)`，样板代码多
+2. `def` 路由与 `async def + async_db_call` 的写法分叉
+
+规划中的 **HybridQuery** 会让 `Model.query.filter(...).all()` 在 async 路由中直接 `await`，无需 lambda 包装：
+
+```python
+@app.get("/users")
+async def list_users():
+    return await User.query.filter_by(is_active=True).all()  # 直接 await 终端
+```
+
+设计与落地计划见：
+- [`docs/orm_docs/22_hybrid_query_sync_async_refactor.md`](docs/orm_docs/22_hybrid_query_sync_async_refactor.md) — 设计与风险清单
+- [`docs/orm_docs/23_hybrid_query_execution_checklist.md`](docs/orm_docs/23_hybrid_query_execution_checklist.md) — 可执行落地清单
+
+HybridQuery 上线后，`async_db_call` 仍保留用于**写终端**（`session.commit()`、复杂事务），不会被取代。
+
 详细使用说明请参考 `PROJECT_SUMMARY.md` 或 `docs/` 目录下的文档。
 
 ---

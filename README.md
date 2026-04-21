@@ -147,6 +147,34 @@ class UserProfile(BaseModel):
 # on_delete 选项：DELETE(级联删除) / SET_NULL(置空) / UNLINK(解除关联) / DO_NOTHING
 ```
 
+### 异步路由 —— 推荐 `def`，混合 async I/O 用 `async_db_call`
+
+ORM 基于同步 Session。`async def` 路由里直接调 `User.query.all()` 会阻塞事件循环，框架内置的
+异步安全检测会在运行时拦截并给出修复指引（`SynchronousOnlyOperation`）。
+
+```python
+# ✅ 纯 DB：用 def，FastAPI 自动放线程池（最常见）
+@app.get("/users")
+def list_users():
+    return User.query.all()
+
+# ✅ 需要混合 async I/O：用 async_db_call 把 ORM 操作挪到线程池
+from yweb.orm import async_db_call
+
+@app.get("/users")
+async def list_users():
+    users = await async_db_call(lambda: User.query.filter_by(is_active=True).all())
+    extra = await http_client.get("...")
+    return {"users": users, "extra": extra}
+```
+
+> `run_db` 是 `async_db_call` 的旧名，仍可用但会发出 `DeprecationWarning`，将在下一版本移除。
+>
+> 未来版本会引入 **HybridQuery**，让 `await User.query.filter(...).all()` 在 `async def` 中
+> 直接可用。设计与落地计划见 [`docs/orm_docs/22_hybrid_query_sync_async_refactor.md`](yweb-core/docs/orm_docs/22_hybrid_query_sync_async_refactor.md)
+> 与 [`docs/orm_docs/23_hybrid_query_execution_checklist.md`](yweb-core/docs/orm_docs/23_hybrid_query_execution_checklist.md)。
+> 详细用法见 [yweb-core/README_DEV.md#异步路由注意事项](yweb-core/README_DEV.md#异步路由注意事项)。
+
 ### 统一响应 —— Resp 快捷类
 
 所有 API 返回统一格式，前端无需猜测响应结构：

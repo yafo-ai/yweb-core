@@ -312,13 +312,12 @@ Phase 0 → Phase 1 → Phase 2 → ... → Phase 7
     - [ ] `CHANGELOG` 标注 breaking-soon：`run_db` 将于下一版本移除（待在下一次发版前补）
   - 验收：生产代码 `rg "\brun_db\b" yweb` 仅剩 alias 定义 / docstring 迁移提示 / `__all__` 标注；17/17 测试通过
 
-- [ ] **8.6** 更新 README（交叉 Phase 6.6）
-  - `yweb-core/README_DEV.md`：
-    - async 路由最佳实践段落
-    - `run_db` → `async_db_call` 迁移说明
-    - HybridQuery 一行介绍 + 链到 doc 22 / 23
-  - 根 `README.md`（如有面向用户部分）同步
-  - 验收：README 读完即可写出正确的 async ORM 代码
+- [x] **8.6** 更新 README（交叉 Phase 6.6）  ✅ 2026-04-21
+  - `yweb-core/README_DEV.md`：在原「异步路由注意事项」章节追加两小节
+    - `run_db` → `async_db_call` 迁移说明（含 deprecated alias 警告 + 上游迁移步骤）
+    - HybridQuery 未来方向一行介绍 + 链 doc 22 / 23
+  - 根 `README.md`：在「核心功能一览」新增「### 异步路由」小节（`def` 首选 + `async_db_call` 混合 I/O + HybridQuery 预告 + 链 README_DEV）
+  - 验收：两个 README 读完即可写出正确的 async ORM 代码；`run_db` 旧名有明确迁移指引
 
 - [ ] **8.7** 扫描并迁移上游项目（如 `y-sso-system`）中的 `run_db`
   - 目的：yweb-core 改名后，不引起依赖项目爆表
@@ -348,3 +347,4 @@ Phase 0 → Phase 1 → Phase 2 → ... → Phase 7
 | 2026-04-21 | 独立新增 `feat(auth) 7e5f887`：JWTManager 支持自定义 `kid` header（JWKS 场景） |
 | 2026-04-21 | 执行 Phase 8.5 代码部分：`refactor(orm)! ff97dc6` `run_db` → `async_db_call`；保留 `run_db` 作为 deprecated alias 并新增 3 个 alias 测试 |
 | 2026-04-21 | 执行 Phase 0 全量扫描 + Phase 8.4 TODO 清理：7 份报告写入 `docs/orm_docs/assets/hq_scan_*.txt`。关键结论：生产代码 0 处 async+sync 残余、测试仅 1 处需迁移、无 `lazy='dynamic'`、无真隐式终端、`isinstance(Query)` 仅 `core_model.paginate` 1 处；同步 Phase 7.3 决策占位符为 D3=A |
+| 2026-04-21 | 执行 Phase 8.6：`README_DEV.md` 追加 `run_db → async_db_call` 迁移说明 + HybridQuery 预告；根 `README.md` 新增「异步路由」小节（零 async 指引的盲点补齐） |
