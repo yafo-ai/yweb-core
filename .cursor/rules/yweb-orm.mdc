@@ -20,5 +20,6 @@ globs: yweb-core/yweb/orm/**/*.py, **/domain/**/entities.py, **/domain/**/model/
 5. **事务管理**：Service 层使用 `@transactional`，不在 Model 层管理事务
 6. **Active Record 方法**：`.add()` / `.update()` / `.delete()` / `.get()` / `.get_all()` / `.query`
 7. **模型层不关心 HTTP**：不返回 `Resp.*`、不抛 HTTP 相关异常
+8. **async 安全**：ORM 基于同步 Session，`async def` 中直接调用会阻塞事件循环并触发 `SynchronousOnlyOperation`。纯 DB 路由用 `def`；混合异步场景用 `await run_db(...)`；启动/lifespan 中用 `with allow_sync():`
 
 不确定时先阅读 `yweb-core/docs/03_orm_guide.md`。

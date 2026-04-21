@@ -88,6 +88,40 @@ YWeb ORM 基于 **SQLAlchemy**，采用 **Active Record 模式**：
 | `yweb-core/docs/orm_commit_behavior_outside_transaction.md` | 事务外提交行为 |
 | `yweb-core/docs/orm_commit_suppression_mechanism.md` | 提交抑制机制 |
 
+## ⚠️ async 安全（必读）
+
+ORM 基于同步 SQLAlchemy Session，在 `async def` 中直接调用会阻塞事件循环，框架会抛出 `SynchronousOnlyOperation`。
+
+| 场景 | 写法 | 安全 |
+|------|------|------|
+| 纯 DB 操作路由 | `def get_users():` | ✅ FastAPI 自动放线程池 |
+| 混合异步 + DB | `async def` + `await run_db(...)` | ✅ 手动放线程池 |
+| `async def` 直接调 ORM | `async def` + `User.query.all()` | ❌ **禁止** |
+| 启动/lifespan | `with allow_sync():` | ✅ 临时豁免 |
+
+```python
+# ✅ 推荐：纯 DB 路由用 def
+@router.get("/users")
+def get_users():
+    return User.query.all()
+
+# ✅ 混合场景用 run_db
+from yweb.orm import run_db
+
+@router.get("/users")
+async def get_users():
+    users = await run_db(User.get_all)
+    extra = await some_async_call()
+    return {"users": users, "extra": extra}
+
+# ❌ 禁止：async def 直接调 ORM
+@router.get("/users")
+async def get_users():
+    return User.query.all()  # → SynchronousOnlyOperation!
+```
+
+详见 `yweb-core/docs/orm_docs/15_fastapi_integration.md` 和 `yweb-core/yweb/orm/async_safety.py`。
+
 ## 工作流程
 
 1. 定义新模型前，阅读 `02_model_definition.md`

@@ -1150,10 +1150,14 @@ with ThreadPoolExecutor(max_workers=5) as executor:
 
 | 场景 | 推荐方式 |
 |-----|---------|
-| FastAPI 路由 | `RequestIDMiddleware` 或 `Depends(get_db)` |
+| FastAPI `def` 路由（纯 DB） | `RequestIDMiddleware` 或 `Depends(get_db)` |
+| FastAPI `async def` 路由（混合 I/O） | `await run_db(...)` 包装同步 ORM 调用 |
 | 脚本/定时任务 | `db_session_scope()` 或 `@with_db_session()` |
 | 线程池任务 | `db_session_scope()` 或 `@with_db_session()` |
-| 异步任务 | `@with_db_session()`（支持异步函数） |
+
+> **重要**：在 `async def` 路由中直接调用同步 ORM 会阻塞事件循环，框架会抛出
+> `SynchronousOnlyOperation` 异常。详见 [数据库会话文档](orm_docs/12_db_session.md) 的
+> 「异步路由与同步 ORM」章节。
 
 ### 10.2 提交策略
 
@@ -1269,6 +1273,15 @@ def set_tenant_id(mapper, connection, target):
 | `@with_db_session()` | session 装饰器 |
 | `on_request_end()` | 清理 session |
 | `db_manager._set_request_id()` | 设置请求 ID（内部 API） |
+| `await run_db(func, ...)` | 在线程池中执行同步 DB 操作（async def 路由用） |
+
+### 异步安全
+
+| API | 说明 |
+|-----|------|
+| `SynchronousOnlyOperation` | async 上下文中调用同步 ORM 时抛出的异常 |
+| `check_async_safety()` | 手动检测是否在 async 上下文中（框架自动调用） |
+| `YWEB_ASYNC_SAFETY` 环境变量 | 控制检测行为：`error` / `warn` / `off` |
 
 ### 模型方法
 

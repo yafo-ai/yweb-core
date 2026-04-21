@@ -22,5 +22,6 @@ globs: yweb-core/yweb/**/*.py, **/app/**/*.py
 5. **Model 字段**：所有字段必须有 `comment` 参数
 6. **响应格式**：使用 `Resp.OK()` / `Resp.NotFound()` 等统一响应
 7. **事务管理**：Service 层使用 `@transactional` 装饰器
+8. **async 安全**：ORM 是同步的，`async def` 路由中**禁止**直接调用 ORM；纯 DB 操作用 `def` 路由，混合异步场景用 `await run_db(...)`
 
 具体规范细节以 `yweb-core/docs/` 下的文档为准，不要凭猜测编码。

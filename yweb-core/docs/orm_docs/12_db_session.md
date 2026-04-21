@@ -526,10 +526,13 @@ scheduler.start()
 ```python
 @with_db_session()
 async def async_task(session):
-    """支持异步函数"""
+    """支持异步函数（装饰器内部处理线程安全）"""
     users = session.query(User).all()
     await send_notifications(users)
 ```
+
+> **注意**：`@with_db_session()` 装饰器内部管理 session 的生命周期和线程上下文。
+> 这与 FastAPI 路由不同——在 FastAPI 路由中，应使用 `def` 路由或 `run_db()` 包装。
 
 #### 参数说明
 
@@ -547,6 +550,102 @@ async def async_task(session):
 | 定时任务 | `@with_db_session` | 装饰器方式，简洁优雅 |
 | 后台任务 | `@with_db_session` | 自动注入 session |
 | 测试代码 | `db_session_scope()` | 便于控制事务边界 |
+
+## 异步路由与同步 ORM
+
+### 问题背景
+
+YWeb ORM 基于 SQLAlchemy 同步 Session。当你在 `async def` 路由中直接调用同步 ORM 方法时，
+这些同步调用会**阻塞事件循环**，导致所有并发请求被串行化，最终引发 `QueuePool TimeoutError`。
+
+```python
+# ❌ 危险：async def 中直接调用同步 ORM，会阻塞事件循环
+@app.get("/users")
+async def list_users():
+    return User.query.all()  # 阻塞！所有并发请求被串行化
+```
+
+### 异步安全检测
+
+YWeb 内置了异步安全检测机制，当你在 `async def` 中直接调用同步 ORM 时，
+框架会抛出 `SynchronousOnlyOperation` 异常并给出修复指引：
+
+```python
+from yweb.orm import SynchronousOnlyOperation
+
+# 在 async 上下文中访问 Model.query 或 db_manager.get_session() 时
+# 框架自动检测并抛出 SynchronousOnlyOperation
+```
+
+检测行为可通过环境变量 `YWEB_ASYNC_SAFETY` 控制：
+
+| 值 | 行为 |
+|----|------|
+| `error`（默认） | 抛出 `SynchronousOnlyOperation` 异常 |
+| `warn` | 发出 `RuntimeWarning` 警告，继续执行 |
+| `off` | 禁用检测（不推荐，仅用于调试） |
+
+### 推荐方式
+
+**方式 1（推荐）：使用 `def` 路由**
+
+FastAPI 会自动将 `def` 路由放入线程池执行，不会阻塞事件循环：
+
+```python
+# ✅ 推荐：def 路由，FastAPI 自动放线程池
+@app.get("/users")
+def list_users():
+    return User.query.all()  # 安全！在线程池中执行
+```
+
+**方式 2：使用 `run_db()` 包装**
+
+当路由需要混合使用异步 I/O 和同步 ORM 时：
+
+```python
+from yweb.orm import run_db
+
+# ✅ async def + run_db()，同步调用在线程池中执行
+@app.get("/users")
+async def list_users():
+    users = await run_db(User.get_all)
+    extra = await some_async_http_call()
+    return {"users": users, "extra": extra}
+
+# 支持 lambda 包裹复杂查询
+@app.get("/active-users")
+async def get_active_users():
+    users = await run_db(
+        lambda: User.query.filter_by(is_active=True).all()
+    )
+    return users
+```
+
+### run_db() API
+
+```python
+from yweb.orm import run_db
+
+result = await run_db(func, *args, **kwargs)
+```
+
+| 参数 | 说明 |
+|------|------|
+| `func` | 同步的可调用对象（函数或 lambda） |
+| `*args` | 传给 func 的位置参数 |
+| `**kwargs` | 传给 func 的关键字参数 |
+
+内部通过 Starlette 的 `run_in_threadpool` 将同步调用移交到线程池，
+`ContextVar`（request_id）会自动传递，因此同一请求内的多次 `run_db()` 调用共享同一个 Session。
+
+### 场景选择指南
+
+| 场景 | 推荐方式 | 原因 |
+|------|----------|------|
+| 纯数据库操作 | `def` 路由 | 最简单，FastAPI 自动线程池 |
+| 混合 async I/O + DB | `async def` + `run_db()` | 保持异步 I/O 优势 |
+| 脚本/定时任务 | `db_session_scope()` / `@with_db_session` | 非 HTTP 场景 |
+| 测试代码 | 直接调用（非 async 上下文） | 检测自动放行 |
 
 ## 常见问题
 
@@ -678,6 +777,29 @@ user.save(commit=True)
 ```
 
 详细说明请参考 [03_CRUD操作](03_crud_operations.md) 中的"刷新对象"和"关系操作使用单次提交模式"章节。
+
+### Q8: async def 路由中调用 ORM 报 SynchronousOnlyOperation？
+
+这是异步安全检测在保护你。在 `async def` 中直接调用同步 ORM 会阻塞事件循环，导致并发性能严重下降。
+
+```python
+# ❌ 触发检测
+@app.get("/users")
+async def list_users():
+    return User.query.all()
+
+# ✅ 方式1：改为 def（推荐）
+@app.get("/users")
+def list_users():
+    return User.query.all()
+
+# ✅ 方式2：使用 run_db()
+@app.get("/users")
+async def list_users():
+    return await run_db(User.get_all)
+```
+
+如需临时禁用检测（不推荐），设置环境变量 `YWEB_ASYNC_SAFETY=off`。
 
 ## 下一步
 

@@ -57,6 +57,59 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 ```
 
+## async def vs def 路由（重要）
+
+YWeb ORM 基于 SQLAlchemy 同步 Session。路由函数的声明方式直接影响并发性能：
+
+| 声明方式 | ORM 调用 | 是否安全 | 说明 |
+|----------|----------|---------|------|
+| `def` | 直接调用 | ✅ 安全 | FastAPI 自动放入线程池 |
+| `async def` | 直接调用 | ❌ 阻塞 | 阻塞事件循环，触发 `SynchronousOnlyOperation` |
+| `async def` | `await run_db(...)` | ✅ 安全 | 手动放入线程池 |
+
+### 推荐：使用 def 路由（纯数据库操作）
+
+```python
+from yweb.orm import get_db
+
+# ✅ 推荐：def 路由，FastAPI 自动在线程池中执行
+@app.get("/users")
+def list_users():
+    return User.query.all()
+
+@app.post("/users")
+def create_user(data: UserCreate):
+    user = User(**data.dict())
+    user.save(True)
+    return user
+```
+
+### 混合场景：async def + run_db()
+
+当路由需要同时使用异步 I/O 和数据库操作时：
+
+```python
+from yweb.orm import run_db
+
+@app.get("/users")
+async def list_users():
+    # 数据库操作放入线程池
+    users = await run_db(User.get_all)
+    # 异步 HTTP 调用保持异步
+    extra = await some_async_http_call()
+    return {"users": users, "extra": extra}
+
+# 支持 lambda 包裹复杂查询
+@app.get("/active-users")
+async def get_active_users():
+    users = await run_db(
+        lambda: User.query.filter_by(is_active=True).all()
+    )
+    return users
+```
+
+> **注意**：如果路由不涉及其他异步 I/O，直接使用 `def` 路由更简单。
+
 ## 依赖注入
 
 ### get_db 依赖
@@ -418,7 +471,28 @@ async def db_session_middleware(request: Request, call_next):
 
 ## 最佳实践
 
-### 1. 使用依赖注入
+### 1. 路由函数声明
+
+```python
+# ✅ 推荐：纯数据库操作使用 def
+@app.get("/users")
+def list_users():
+    return User.query.all()
+
+# ✅ 推荐：混合 async I/O 使用 async def + run_db
+@app.get("/users")
+async def list_users():
+    users = await run_db(User.get_all)
+    extra = await some_async_call()
+    return {"users": users, "extra": extra}
+
+# ❌ 禁止：async def 中直接调用同步 ORM
+@app.get("/users")
+async def list_users():
+    return User.query.all()  # 触发 SynchronousOnlyOperation
+```
+
+### 2. 使用依赖注入
 
 ```python
 # 推荐

@@ -26,3 +26,4 @@ globs: **/api/**/*.py, **/services/**/*.py, **/domain/**/*.py
 - 统一使用 `Resp.OK()` / `Resp.BadRequest()` / `Resp.NotFound()` 响应
 - 异常统一捕获 `ValueError`，转为 `Resp.BadRequest()`
 - 简单纯查询可由 API 层直接调用模型，无需经过 Service
+- **async 安全（重要）**：涉及 ORM 调用的路由**优先用 `def`**（FastAPI 自动放线程池）；若路由必须 `async def`（需要 await 其他异步操作），ORM 调用必须用 `await run_db(...)` 包装，**禁止**在 `async def` 中直接调 ORM

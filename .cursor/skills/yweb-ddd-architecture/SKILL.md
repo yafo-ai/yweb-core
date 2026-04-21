@@ -51,6 +51,28 @@ API 层 (路由) → Service 层 (业务编排) → Domain 层 (领域模型)
 - 分页响应使用 `PageResponse`
 - 异常统一捕获 `ValueError`，转为 `Resp.Fail()`
 
+## ⚠️ API 路由 async 安全
+
+ORM 是同步的，路由声明方式直接影响并发性能：
+
+- **纯 DB 操作**：路由用 `def`（推荐），FastAPI 自动放线程池
+- **混合异步 + DB**：路由用 `async def`，DB 调用用 `await run_db(...)` 包装
+- **禁止**：`async def` 中直接调用 `Model.query` / `Model.get()` 等同步 ORM，会触发 `SynchronousOnlyOperation`
+
+```python
+# ✅ def 路由
+@router.get("/users")
+def get_users():
+    return User.query.all()
+
+# ✅ async def + run_db
+@router.get("/users")
+async def get_users():
+    users = await run_db(User.get_all)
+    extra = await some_async_call()
+    return {"users": users, "extra": extra}
+```
+
 ## 详细规范文档
 
 编码前**必须阅读**对应文档以获取完整规范和示例：
