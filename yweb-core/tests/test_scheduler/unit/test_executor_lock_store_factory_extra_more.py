@@ -469,7 +469,23 @@ class TestOrmStoreExtra:
 
 
 class TestFactoryExtra:
-    """factory.py 低覆盖分支补测。"""
+    """factory.py 低覆盖分支补测。
+
+    注意：本类内的 `create_scheduler_models(...)` / `setup_scheduler(...)` 调用
+    会把表（含无前缀 `scheduler_job` 等）注入全局 `BaseModel.metadata`，
+    需要 autouse fixture 做快照 + teardown 清理，否则会污染 test_orm
+    等其他模块的 create_all（详见 23 号清单 Phase 5B.3）。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolate_metadata(self):
+        from yweb.orm import BaseModel
+
+        pre_tables = set(BaseModel.metadata.tables.keys())
+        yield
+        new_tables = set(BaseModel.metadata.tables.keys()) - pre_tables
+        for name in new_tables:
+            BaseModel.metadata.remove(BaseModel.metadata.tables[name])
 
     def test_customizers_singletons_and_mount(self, monkeypatch):
         called = {"job": 0, "history": 0, "stats": 0, "router": 0}

@@ -325,7 +325,32 @@ commit `0a5e5a8` 已把生产 async 路由批量改为 def；Phase 0 扫描也�
     - [x] `TestLifecycleScriptEntry` 类 6 条全绿（原 4 条 + 新增 2 条）
     - [x] 全量回归 **2698 passed / 0 failed / 0 errors**（vs Phase 5B.1 的 2696，+2 正好对应 L6e/L6f；L6d 翻正向不改数量）
 
-**Phase 5B 验收**：scheduler 历史记录 async 路径真正落库；`test_l6d` 已翻正向；scheduler fixture 切回 `HybridQueryProperty` 后 scheduler 测试套全绿。**Phase 5B 全部完成**。
+- [x] **5B.3** `tests/test_scheduler/unit/` 跨模块 metadata 污染修复  ✅ 2026-04-21
+  - 问题：`pytest tests/test_scheduler/ tests/test_orm/unit/` 组合下出现 **6 failed / 515 errors**（单跑 test_orm 全绿），表现为 test_orm 的 `BaseModel.metadata.create_all(memory_engine)` 抛 `sqlite3.OperationalError: index ix_scheduler_job_next_run_time already exists`
+  - 定性：pre-existing 测试污染，与 Phase 5B.1 / 5B.2 改动无关（在 Phase 5 `hq_phase5_tests.txt` 已首次记录）。生产代码零影响，仅在特定测试顺序 / 子集下触发；pytest 默认字母序（`test_orm` < `test_scheduler`）下恰好不触发，所以 CI 未暴露
+  - 根因：以下两处调用了**无前缀 / 自定义前缀**的 `create_scheduler_models(...)` / `setup_scheduler(...)`，会把 `scheduler_job / scheduler_job_history / scheduler_job_stats`（及 `sys_` / `x_` 等前缀的变体）**永久注册进全局 `BaseModel.metadata`**；且因 `_create_model_class` 内置 `__table_args__ = {"extend_existing": True}`，同名 Table 虽然复用但每次调用都会 append 一份 Index 定义，后续任何 `create_all(新 engine)` 都会在新 DB 上尝试创建同名 Index 多次 → 报 `already exists`：
+    - `tests/test_scheduler/unit/test_models.py::TestCreateSchedulerModels`（3 条无前缀 + 1 条 `sys_` + 1 条自定义表名）
+    - `tests/test_scheduler/unit/test_executor_lock_store_factory_extra_more.py::TestFactoryExtra::test_setup_scheduler`（`setup_scheduler(app=...)` 默认 `table_prefix=""`）与同类 `test_customizers_singletons_and_mount`（`x_` 前缀）
+  - 修复动作（外科手术，只改测试文件，不动生产代码）：
+    - 两个污染类各加一份 `@pytest.fixture(autouse=True)` 做 **metadata 快照 + teardown 移除新增表**：
+      ```python
+      @pytest.fixture(autouse=True)
+      def _isolate_metadata(self):
+          from yweb.orm import BaseModel
+          pre_tables = set(BaseModel.metadata.tables.keys())
+          yield
+          for name in set(BaseModel.metadata.tables.keys()) - pre_tables:
+              BaseModel.metadata.remove(BaseModel.metadata.tables[name])
+      ```
+    - 类 docstring 补写「污染说明 + 为何需要 fixture」备忘，防止后续有人删掉
+  - 为何不做「scheduler/unit 层统一 autouse 保护伞」：Karpathy §3 外科手术原则 —— 只治已知污染源，不给无关测试加全局副作用；且未来新的污染点会在首次对应子集组合下显性失败，便于精准定位
+  - 验收：
+    - [x] `pytest tests/test_scheduler/unit/test_models.py tests/test_orm/unit/test_async_safety.py` 从 14 errors → **45 passed**
+    - [x] `pytest tests/test_scheduler/unit/ tests/test_orm/unit/` 从 6 failed / 515 errors → **967 passed**
+    - [x] `pytest tests/test_scheduler/ tests/test_orm/unit/` 从 6 failed / 515 errors → **1035 passed**
+    - [x] 全量回归 **2698 passed / 0 failed / 0 errors**（与 Phase 5B.2 基线完全一致，零回归）
+
+**Phase 5B 验收**：scheduler 历史记录 async 路径真正落库；`test_l6d` 已翻正向；scheduler fixture 切回 `HybridQueryProperty` 后 scheduler 测试套全绿；跨模块 metadata 污染清零。**Phase 5B 全部完成**。
 
 ---
 
@@ -458,4 +483,5 @@ commit `0a5e5a8` 已把生产 async 路由批量改为 def；Phase 0 扫描也�
 | 2026-04-21 | 执行 Phase 4 — 接入 CoreModel.query：`hybrid_query.py` 加 `HybridQueryProperty` 描述符（默认 on / `YWEB_HYBRID_QUERY=off` 回退 `AsyncSafeQueryProperty`）；`db_session.py` 置换挂载点；`core_model.paginate()` 加 HybridQuery 剥壳；`async_safety.py` docstring 改写角色分工；`yweb/orm/__init__.py` 导出 `HybridQuery`。全量 pytest：2673 passed / 14 pre-existing (slowapi 缺失，与 Phase 4 无关) / 0 新失败。结果存入 `assets/hq_phase4_failing_async_tests.txt` |
 | 2026-04-21 | 执行 Phase 5（B+C 混合）——**测试迁移 + lifecycle**：⑴ 尝试 scheduler fixture 对齐 `HybridQueryProperty` 暴露生产 bug（`yweb/scheduler/scheduler.py` async `_execute_job` 直接调用同步 `history_manager.record_*` → `.first()` 返回 `_HybridTerminal` 导致「主键重试失败 + 属性访问失败」），确认该 bug 在 Phase 4 前就已静默存在；⑵ 采用 B+C 混合：本轮回滚 scheduler 改动 + 注释指向新 **Phase 5B** 修复；⑶ 新增 `tests/test_orm/unit/test_hybrid_query_lifecycle.py` 8 tests（L1 串行多终端清理 / L2 异常路径清理 / L4 无中间件反例 via `ScopedRegistry` 穿透 / L5 gather 并发一致性 / L6a-d 脚本入口 4 场景，含 `db_session_scope` 在 async 下的 known gap）全绿；⑷ 5.3 懒加载 / pool 压测 / CancelledError 延后至 Phase 7 发布前补测。全量回归 2663 passed，与 Phase 4 基线零差异。详见 `assets/hq_phase5_tests.txt` |
 | 2026-04-21 | 执行 Phase 5B.1 — Scheduler async executor 历史记录修复：⑴ `yweb/scheduler/scheduler.py` 新增 `from starlette.concurrency import run_in_threadpool` 并把 `history_manager.record_start / record_success / record_failure(timeout) / record_failure(exception)` **4 处**调用全部 `await run_in_threadpool(...)` 包装；⑵ `tests/test_scheduler/conftest.py` 改回 `HybridQueryProperty` 包装并加 setup/teardown 的 save/restore（踩坑：`getattr(CoreModel, "query")` 会触发 descriptor → 对抽象基类查询 `ArgumentError`，必须改走 `CoreModel.__dict__.get`）；⑶ `tests/test_scheduler/integration/test_history.py:392` 改回 `await ... first()`；⑷ 新增回归测试 `test_async_executor_records_failure_under_hybridquery` 验证 async executor 失败路径下 `record_start + record_failure` 同时落库 + `status=failed` + `error` 包含异常信息；⑸ 全量回归 **2696 passed / 0 failed / 0 errors**，vs Phase 5 基线 2695 passed 正好 +1（新增回归），其它零差异；顺带修掉 pre-existing `test_auth → test_scheduler` 跨模块污染（原先 12 errors 归零）。5B.2（`db_session_scope` async gap）仍待用户拍板 A/B/C |
-| 2026-04-21 | 执行 Phase 5B.2 — `db_session_scope` 在 async 上下文下的 API gap（用户选定方案 A）：⑴ `yweb/orm/db_session.py::db_session_scope` 内部用 `with allow_sync():` 包裹整个 scope 生命周期（`_set_request_id + get_session + yield + commit/rollback + on_request_end` 全覆盖）；⑵ `async_safety.py` 模块 docstring 补「`async def + with db_session_scope(): → 放行`」一行；⑶ `22_hybrid_query_sync_async_refactor.md` §7.3.7 追加 Phase 5B.2 后续说明；⑷ `test_l6d` 翻正向（`pytest.raises` → 正常进入/查询/清理）并新增 `test_l6e`（async auto_commit 真落库）+ `test_l6f`（async 异常路径 rollback + 清理）；⑸ 全量回归 **2698 passed / 0 failed / 0 errors**，vs Phase 5B.1 的 2696 正好 +2（L6e/L6f），L6d 翻正向不改数量。**Phase 5B 全部完成** |
+| 2026-04-21 | 执行 Phase 5B.2 — `db_session_scope` 在 async 上下文下的 API gap（用户选定方案 A）：⑴ `yweb/orm/db_session.py::db_session_scope` 内部用 `with allow_sync():` 包裹整个 scope 生命周期（`_set_request_id + get_session + yield + commit/rollback + on_request_end` 全覆盖）；⑵ `async_safety.py` 模块 docstring 补「`async def + with db_session_scope(): → 放行`」一行；⑶ `22_hybrid_query_sync_async_refactor.md` §7.3.7 追加 Phase 5B.2 后续说明；⑷ `test_l6d` 翻正向（`pytest.raises` → 正常进入/查询/清理）并新增 `test_l6e`（async auto_commit 真落库）+ `test_l6f`（async 异常路径 rollback + 清理）；⑸ 全量回归 **2698 passed / 0 failed / 0 errors**，vs Phase 5B.1 的 2696 正好 +2（L6e/L6f），L6d 翻正向不改数量 |
+| 2026-04-21 | 执行 Phase 5B.3 — `tests/test_scheduler/unit/` 跨模块 metadata 污染修复：根因 = `TestCreateSchedulerModels` / `TestFactoryExtra` 调 `create_scheduler_models()` / `setup_scheduler(app=...)` 无前缀时把 `scheduler_job` 等表永久注册进 `BaseModel.metadata`，叠加 `_create_model_class` 的 `extend_existing=True` 导致 Index 累加，后续 test_orm 的 `create_all(新 engine)` 报 `index ... already exists`。修复 = 两个类各加 `@pytest.fixture(autouse=True) _isolate_metadata`（metadata 快照 + teardown 移除新增表）。从 6 failed / 515 errors → `test_scheduler/ + test_orm/unit/` 组合 **1035 passed**；全量回归 **2698 passed / 0 failed / 0 errors**，与 5B.2 基线零差异。**Phase 5B 全部完成** |
