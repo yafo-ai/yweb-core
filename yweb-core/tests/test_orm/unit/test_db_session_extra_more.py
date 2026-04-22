@@ -163,7 +163,7 @@ class TestDbSessionExtraMore:
         monkeypatch.setattr(dbs.db_manager, "get_session", lambda: sess)
         monkeypatch.setattr(dbs, "on_request_end", lambda: calls.__setitem__("end", calls["end"] + 1))
 
-        @dbs.with_db_session(request_id="sync-{rand}", auto_commit=True)
+        @dbs.with_db_session(request_id="sync-test", auto_commit=True)
         def fn(session, x):
             assert session is sess
             return x + 1
@@ -171,9 +171,9 @@ class TestDbSessionExtraMore:
         assert fn(1) == 2
         assert sess.commit_called == 1
         assert calls["end"] >= 1
-        assert calls["rid"][-1].startswith("sync-")
+        assert calls["rid"][-1].startswith("sync-test-")
 
-        @dbs.with_db_session(request_id="async-{rand}", auto_commit=False)
+        @dbs.with_db_session(request_id="async-test", auto_commit=False)
         async def afn(session, x):
             assert session is sess
             return x + 2

@@ -12,7 +12,8 @@
     5. async_db_call() *args/**kwargs 透传 → 参数正确传递
     6. async_db_call() 内函数抛异常 → 异常正确传播到调用方
     7. async_db_call() 非 HTTP 请求上下文 → 输出警告日志
-    8. YWEB_ASYNC_SAFETY=off → 禁用检测
+    8. @with_db_session() 装饰 async 函数 → 不被拦截，正常执行
+    9. YWEB_ASYNC_SAFETY=off → 禁用检测
     9. YWEB_ASYNC_SAFETY=warn → 警告但不报错
     10. 异常类型继承关系
 
@@ -158,6 +159,21 @@ class TestAsyncSafetyDetection:
             mock_logger.warning.assert_called_once()
             msg = mock_logger.warning.call_args[0][0]
             assert "非 HTTP 请求上下文" in msg
+
+    def test_with_db_session_async_does_not_raise(self):
+        """@with_db_session() 装饰 async 函数应正常工作，不被 async 安全检测拦截"""
+        from yweb.orm import with_db_session
+
+        @with_db_session()
+        async def async_task(session):
+            return session is not None
+
+        async def _run():
+            return await async_task()
+
+        init_database(database_url="sqlite:///:memory:")
+        BaseModel.metadata.create_all(bind=db_manager.engine)
+        assert asyncio.run(_run()) is True
 
     def test_mode_off_disables_detection(self):
         """YWEB_ASYNC_SAFETY=off 应完全禁用检测"""

@@ -574,7 +574,9 @@ def db_session_scope(
     - 自动清理 session
 
     Args:
-        request_id: 请求ID，用于日志追踪，不传则自动生成
+        request_id: 请求ID前缀，用于日志追踪。
+                   实际ID格式为 "{前缀}-{随机6位}"，保证每次调用唯一。
+                   不传则使用 "scope" 作为前缀
         auto_commit: 是否自动提交，默认 True
 
     Yields:
@@ -620,7 +622,8 @@ def db_session_scope(
     # - 用户在 scope 内的同步 ORM 操作（.query / .commit 等）
     # - on_request_end() 里任何潜在的 async_safety 检测
     with allow_sync():
-        db_manager._set_request_id(request_id)
+        prefix = request_id or "scope"
+        db_manager._set_request_id(f"{prefix}-{uuid4().hex[:6]}")
         session = db_manager.get_session()
         try:
             yield session
@@ -643,8 +646,9 @@ def with_db_session(
     支持同步和异步函数。
     
     Args:
-        request_id: 请求ID，用于日志追踪。
-                   不传则使用 "{函数名}-{随机ID}" 格式自动生成
+        request_id: 请求ID前缀，用于日志追踪。
+                   实际ID格式为 "{前缀}-{随机6位}"，保证每次调用唯一。
+                   不传则使用函数名作为前缀
         auto_commit: 是否自动提交，默认 True
     
     使用示例:
@@ -690,14 +694,11 @@ def with_db_session(
             await some_async_operation(users)
     """
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
-        # 生成请求ID
-        func_request_id = request_id or f"{func.__name__}-{{rand}}"
+        prefix = request_id or func.__name__
         
         @wraps(func)
         def sync_wrapper(*args, **kwargs) -> T:
-            # 替换 {rand} 占位符
-            actual_request_id = func_request_id.replace("{rand}", uuid4().hex[:6])
-            db_manager._set_request_id(actual_request_id)
+            db_manager._set_request_id(f"{prefix}-{uuid4().hex[:6]}")
             
             session = db_manager.get_session()
             try:
@@ -713,21 +714,21 @@ def with_db_session(
         
         @wraps(func)
         async def async_wrapper(*args, **kwargs) -> T:
-            # 替换 {rand} 占位符
-            actual_request_id = func_request_id.replace("{rand}", uuid4().hex[:6])
-            db_manager._set_request_id(actual_request_id)
-            
-            session = db_manager.get_session()
-            try:
-                result = await func(session, *args, **kwargs)
-                if auto_commit:
-                    session.commit()
-                return result
-            except Exception:
-                session.rollback()
-                raise
-            finally:
-                on_request_end()
+            from .async_safety import allow_sync
+
+            with allow_sync():
+                db_manager._set_request_id(f"{prefix}-{uuid4().hex[:6]}")
+                session = db_manager.get_session()
+                try:
+                    result = await func(session, *args, **kwargs)
+                    if auto_commit:
+                        session.commit()
+                    return result
+                except Exception:
+                    session.rollback()
+                    raise
+                finally:
+                    on_request_end()
         
         if asyncio.iscoroutinefunction(func):
             return async_wrapper
