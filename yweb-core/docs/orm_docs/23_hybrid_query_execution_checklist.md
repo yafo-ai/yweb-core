@@ -376,20 +376,69 @@ commit `0a5e5a8` 已把生产 async 路由批量改为 def；Phase 0 扫描也�
 
 ---
 
-## Phase 7 — 发布与回滚预案
+## Phase 7 — 发布与回滚预案（2026-04-21 部分完成）
 
-- [ ] **7.1** 版本号 bump（按项目约定）
-- [ ] **7.2** CHANGELOG 新增条目（重点标注 **breaking：async 中 `Model.query....all()` 必须 `await`**）
-- [ ] **7.3** 回滚脚本 / 开关：
-  - 选项 A（推荐）：环境变量 `YWEB_HYBRID_QUERY=off` → 回退到旧 `AsyncSafeQueryProperty`
-  - 选项 B：git revert Phase 4 的 commit
+> 本 Phase 分两部分：**文档闭环**（可在发版前独立完成）+ **实际发版动作**（版本号 / CHANGELOG / tag）。本轮完成前者；后者延到你决定具体发版节点再做。
+
+- [ ] **7.1**（延后）版本号 bump —— 等实际发版节点由你决定
+  - 当前 `pyproject.toml` version = `0.1.3`
+  - 建议：本次含两项用户可感知的变更（`run_db` 重命名 + HybridQuery 范式升级），按语义化版本建议至少 minor bump（`0.2.0`）；如果上游认为"async 下漏 `await` 由 `SynchronousOnlyOperation` → `TypeError` 的行为变化"属于 breaking，走 major bump
+  - 延后理由：版本号是发版动作，和文档/代码改动不同步；发版前再统一做
+- [ ] **7.2**（延后）CHANGELOG 新增条目 —— 项目暂无 `CHANGELOG.md`，首建是工程约定决策，留给发版节点统一拍板
+  - 已在 `docs/orm_docs/assets/upstream_rundb_migration.md` 顶部「本次升级一览」表与「兼容矩阵」节完整记录所有变更点与兼容性影响，发版时可直接搬到 `CHANGELOG.md`
+- [x] **7.3** 回滚脚本 / 开关  ✅ 2026-04-21
+  - 开关已在 Phase 4 实现（`HybridQueryProperty` 读 `YWEB_HYBRID_QUERY` 环境变量）
+  - 文档集中到 `docs/orm_docs/assets/upstream_rundb_migration.md`「紧急回滚预案」节，分 3 级：
+    - 级别 1：`YWEB_HYBRID_QUERY=off` 环境变量回退（秒级，推荐）
+    - 级别 2：配合 `YWEB_ASYNC_SAFETY=warn` 告警模式，给定位留时间
+    - 级别 3：git revert（分钟级；按 Phase 6 → 5B → 4 倒序）
+  - 配套「什么时候该回滚」决策表覆盖 5 类典型现象
   - 决策记录：`[x] 最终方案 = A（YWEB_HYBRID_QUERY=off 环境变量回退，D3 锁定 2026-04-20）`
-- [ ] **7.4** 迁移指南：上游项目（如 `y-sso-system`）升级 yweb 时的 5 分钟迁移步骤
-  - [ ] 检查 async 路由：`rg -U "async def \w+.*\n.*\.query\." <project>`
-  - [ ] 每处判定「加 `await` / 改 `def` / `await async_db_call`」
-  - [ ] 回归跑上游测试
+- [x] **7.4** 迁移指南：上游项目升级指南  ✅ 2026-04-21
+  - 从「仅 `run_db` 改名」扩展为「yweb-core 2026-04 完整升级指南」，文件名保留 `upstream_rundb_migration.md`（不破坏旧 commit 引用）
+  - 新增章节：
+    - 「可选升级：async 读路径改用 HybridQuery 范式」—— 扫描命令 / 决策树 / 4 组改法示例（A 单句只读 / B paginate / C 多语句命名函数 / D classmethod）+ 不改的情形 + 回归验证
+    - 「紧急回滚预案」—— 见 7.3
+    - 「兼容矩阵」—— 7 种老写法的升级后表现与建议
+  - 原 `run_db → async_db_call` 章节保留不变
+  - 文件开头加「本次升级一览」表，可作为 CHANGELOG 条目的雏形
 
-**Phase 7 验收**：发布后 24h 无 P0；上游项目按指南升级一次性通过。
+**Phase 7（文档部分）验收**：
+- [x] 上游项目按指南可以一次性完成升级（扫描 → 决策 → 改法 → 验证 → 回滚路径 完整闭环）
+- [x] 紧急回滚可在不读代码的前提下走完 —— 运维只看迁移指南就够
+- [x] 全量回归 **2698 passed / 0 failed / 0 errors**（纯 md 零回归）
+
+**Phase 7（发版动作）延后项**：`7.1 版本号 bump` + `7.2 CHANGELOG 首建`，在你决定发版节点时一起做。
+
+---
+
+## Phase 7B — 补测（Phase 5 延期项）
+
+> 原计划 Phase 5 做的「衍生测试」在 Phase 5 收口时评估后显性延后至发版前补测，单独建 Phase 7B 便于独立跟踪。每一项都是代码 + 测试双维度，不再夹带其它文档改动。
+
+- [ ] **7B.1** `asyncio.CancelledError` 路径下中间件 `finally` 的 session 清理覆盖
+  - 场景：client 在 async 路由执行中途断开 → 中间件 finally 是否仍跑 `on_request_end()`
+  - 测试：用 `httpx.AsyncClient` 模拟 `timeout` 短于服务端逻辑，验证 `_registry_has() is False`
+  - 预估：新增 2 条测试，`test_hybrid_query_lifecycle.py` 追加
+- [ ] **7B.2** 连接池压测
+  - 条件：`concurrency = pool_size + max_overflow + 5`，`engine.pool.checkedout() == 0` 恢复
+  - 测试：切 `QueuePool` + 文件 SQLite，gather 起 25 个 await 终端，全部返回后验证池清零
+  - 预估：新增 1 条集成测试，`tests/test_orm/integration/test_hybrid_query_pool.py` 新建
+- [ ] **7B.3** Lazy 加载 trap 示例
+  - 正例：`joinedload` 在 async 终端里一次性取齐
+  - 反例：async 终端返回后在 coroutine 里访问关系属性 → `DetachedInstanceError`（或 `SynchronousOnlyOperation`，因 session 已被 `on_request_end` 关闭）
+  - 测试：各 1 条，加在 lifecycle 测试里；文档侧链接到 04_query_and_filter.md
+- [ ] **7B.4** `lazy='dynamic'` 覆盖
+  - 确认 AppenderQuery 在 HybridQuery 路径下的行为（不走 `CoreModel.query`，应该是透传 SA 原生）
+  - 如果无法 await（AppenderQuery 不是 HybridQuery），文档侧需要警示
+  - 测试：1 条负面测试固化当前行为
+- [ ] **7B.5** `DetachedInstanceError` 处理策略
+  - 归纳「什么时候会抛 / 怎么规避」（常见于 async 终端返回后在协程里继续访问关系）
+  - 测试：1 条显性捕获 + 1 条正确使用方法对照
+
+**Phase 7B 验收**：所有新增测试独立绿；新增知识点已回流到 04/05/12/15 其中某一个用户手册章节；不影响既有测试数量（预期 2698 → 2708 左右）。
+
+**Phase 7B 是否发版前必须完成**：否。这些是**稳定性加固**而不是功能正确性；发版可以不等 7B 完成，但发版后 1 个迭代内应收口。
 
 ---
 
@@ -493,3 +542,4 @@ commit `0a5e5a8` 已把生产 async 路由批量改为 def；Phase 0 扫描也�
 | 2026-04-21 | 执行 Phase 5B.2 — `db_session_scope` 在 async 上下文下的 API gap（用户选定方案 A）：⑴ `yweb/orm/db_session.py::db_session_scope` 内部用 `with allow_sync():` 包裹整个 scope 生命周期（`_set_request_id + get_session + yield + commit/rollback + on_request_end` 全覆盖）；⑵ `async_safety.py` 模块 docstring 补「`async def + with db_session_scope(): → 放行`」一行；⑶ `22_hybrid_query_sync_async_refactor.md` §7.3.7 追加 Phase 5B.2 后续说明；⑷ `test_l6d` 翻正向（`pytest.raises` → 正常进入/查询/清理）并新增 `test_l6e`（async auto_commit 真落库）+ `test_l6f`（async 异常路径 rollback + 清理）；⑸ 全量回归 **2698 passed / 0 failed / 0 errors**，vs Phase 5B.1 的 2696 正好 +2（L6e/L6f），L6d 翻正向不改数量 |
 | 2026-04-21 | 执行 Phase 5B.3 — `tests/test_scheduler/unit/` 跨模块 metadata 污染修复：根因 = `TestCreateSchedulerModels` / `TestFactoryExtra` 调 `create_scheduler_models()` / `setup_scheduler(app=...)` 无前缀时把 `scheduler_job` 等表永久注册进 `BaseModel.metadata`，叠加 `_create_model_class` 的 `extend_existing=True` 导致 Index 累加，后续 test_orm 的 `create_all(新 engine)` 报 `index ... already exists`。修复 = 两个类各加 `@pytest.fixture(autouse=True) _isolate_metadata`（metadata 快照 + teardown 移除新增表）。从 6 failed / 515 errors → `test_scheduler/ + test_orm/unit/` 组合 **1035 passed**；全量回归 **2698 passed / 0 failed / 0 errors**，与 5B.2 基线零差异。**Phase 5B 全部完成** |
 | 2026-04-21 | 执行 Phase 6 — 文档范式升级：把 async 读路径首选从「`async_db_call(lambda: ...)`」升级为「`await Model.query.xxx()`」，`async_db_call` 降级为写路径 / 多语句事务 / 混合 async I/O 兜底。改动 8 个入口：`.cursor/rules/yweb-orm.mdc`、`.cursor/skills/yweb-orm/SKILL.md`、`docs/03_orm_guide.md`（新增 §10.1.1 HybridQuery 首选小节）、`docs/orm_docs/12_db_session.md`（推荐方式 / 场景选择表 / Q8 重写）、`docs/orm_docs/15_fastapi_integration.md`（路由对比表 + 读/写场景示例）、`docs/orm_docs/04_query_and_filter.md`（页尾 async 写法）、`docs/orm_docs/05_pagination.md`（paginate 的 await 用法）、`docs/orm_docs/README.md`（banner + 功能矩阵 + 模块树注释）。所有改动用统一 4 句话模板（HybridQuery 读 / async_db_call 写 / def 路由最简 / `YWEB_HYBRID_QUERY=off` 回滚）。6.9 README_DEV.md 与 6.10 ASYNC_SYNC_ORM_GUIDE.md 评估后不做。全量回归 **2698 passed / 0 failed / 0 errors**，与 Phase 5B.3 基线完全一致（纯 md，零回归） |
+| 2026-04-21 | 执行 Phase 7（文档部分）— 发布与回滚预案闭环：⑴ 把 `assets/upstream_rundb_migration.md` 从「仅 `run_db` 改名迁移」扩展为完整的「yweb-core 2026-04 升级指南」（文件名保留以不破坏旧 commit 引用），顶部加「本次升级一览」表（可作为 CHANGELOG 雏形）；⑵ 新增「可选升级：async 读路径改用 HybridQuery 范式」大章（扫描命令 / 决策树 / 4 组改法示例 / 不改的情形 / 回归验证）；⑶ 新增「紧急回滚预案」三级（环境变量 → 双开关 → git revert 倒序）+「什么时候该回滚」5 类现象决策表；⑷ 新增「兼容矩阵」7 类老写法行为对照表；⑸ 23 号清单 Phase 7.3 / 7.4 勾选，7.1（版本号 bump）与 7.2（CHANGELOG 首建）标「延后到实际发版节点」并写理由；⑹ 新建 Phase 7B 把 Phase 5 延期的补测（CancelledError / 连接池压测 / lazy trap / `lazy='dynamic'` / `DetachedInstanceError`）独立跟踪，发版前非必须完成。全量回归 **2698 passed / 0 failed / 0 errors**（纯 md，零回归） |
