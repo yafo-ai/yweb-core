@@ -47,18 +47,6 @@
 |------|------|
 | [21_OwnsOne 值对象嵌入](21_owns_one.md) | 值对象嵌入（OwnsOne）、OwnedType 定义、查询代理、序列化 |
 
-### 同步 / 异步查询统一
-
-> **HybridQuery 已上线**：`Model.query` 在 async 路由下**链式不变、终端加 `await`** 即可，
-> 详见 [12_数据库会话 · 推荐方式](12_db_session.md#推荐方式) 与
-> [15_FastAPI 集成 · async def vs def 路由](15_fastapi_integration.md#async-def-vs-def-路由重要)。
-> 写操作 / 多语句事务 / 混合 async I/O 仍走 `async_db_call(...)` 兜底。
-
-| 文档 | 说明 |
-|------|------|
-| [22_HybridQuery 同步异步统一查询（重构设计）](22_hybrid_query_sync_async_refactor.md) | HybridQuery 方案、流程图、重构前后对比 PNG、`query.session` 兼容与实施清单（历史设计档） |
-| [23_HybridQuery 重构 · 可执行清单](23_hybrid_query_execution_checklist.md) | Phase 0–8 可勾选执行项；设计决策 D1/D2/D3/D5 记录 |
-
 ## 功能清单
 
 ### 核心模块
@@ -68,7 +56,6 @@ yweb/orm/
 ├── core_model.py           # 核心ORM模型类（CRUD、分页等）
 ├── base_model.py           # 业务模型基类（继承CoreModel）
 ├── db_session.py           # 数据库会话管理、async_db_call()
-├── hybrid_query.py         # HybridQuery：同步/异步双态 query（async 下链式不变，终端加 await）
 ├── async_safety.py         # 异步安全检测（SynchronousOnlyOperation）
 ├── history.py              # 版本历史记录
 ├── base_dto.py             # 数据传输对象
@@ -97,8 +84,6 @@ yweb/orm/
 | **值对象嵌入** | OwnsOne、OwnedType、嵌套/平铺序列化 | ✅ 完整实现 |
 | **会话管理** | scoped_session、依赖注入 | ✅ 完整实现 |
 | **异步安全** | async 上下文检测、async_db_call()、SynchronousOnlyOperation | ✅ 完整实现 |
-| **异步查询** | HybridQuery（`await Model.query.xxx()`）、`YWEB_HYBRID_QUERY` 回滚开关 | ✅ 完整实现 |
-
 ## 快速开始
 
 ### 安装依赖

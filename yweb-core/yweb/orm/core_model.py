@@ -1021,11 +1021,6 @@ class CoreModel(IdModel):
         
         from sqlalchemy.orm.query import Query
         from sqlalchemy.sql.selectable import Select
-        from .hybrid_query import HybridQuery
-
-        # 兼容 HybridQuery：剥到底层 SA Query 再进入原有分支
-        if isinstance(query_or_stmt, HybridQuery):
-            query_or_stmt = query_or_stmt._query
 
         if isinstance(query_or_stmt, Query):
             # 处理Query对象

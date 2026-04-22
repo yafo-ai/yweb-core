@@ -1151,46 +1151,34 @@ with ThreadPoolExecutor(max_workers=5) as executor:
 | 场景 | 推荐方式 |
 |-----|---------|
 | FastAPI `def` 路由（纯 DB） | `RequestIDMiddleware` 或 `Depends(get_db)` |
-| FastAPI `async def` 路由 — **读路径** | **直接 `await Model.query.xxx()`**（HybridQuery） |
+| FastAPI `async def` 路由 | `await async_db_call(...)` 包装 |
 | FastAPI `async def` 路由 — 写路径 / 多语句 | `await async_db_call(...)` 包装 |
 | 脚本/定时任务（含 async 入口） | `db_session_scope()` 或 `@with_db_session()`（async 下内部自动 `allow_sync`） |
 | 线程池任务 | `db_session_scope()` 或 `@with_db_session()` |
 
-> **async 读路径首选 HybridQuery**：`Model.query` 已经升级为双态代理——同步代码零改动，
-> async 路由里链式不变、终端加 `await` 即可，详见 [10.1.1](#1011-hybridquery-async-下的查询首选) 与
-> [数据库会话文档](orm_docs/12_db_session.md)。
->
-> 写操作（`save() / add() / update() / delete() / commit()`）、多语句事务、复杂回调
-> 仍建议走 `def` 路由或 `await async_db_call(...)` 包装。
+> 纯 DB 操作推荐 `def` 路由（FastAPI 自动放入线程池）。需要混合 async I/O 时使用
+> `await async_db_call(...)` 包装。详见 [数据库会话文档](orm_docs/12_db_session.md)。
 
-### 10.1.1 HybridQuery：async 下的查询首选
+### 10.1.1 async 路由中使用 ORM
 
-从 yweb-core 引入 HybridQuery 起，`Model.query` 会根据上下文自动切换行为：
+在 `async def` 路由中直接访问 `Model.query` 会抛出 `SynchronousOnlyOperation`。
+推荐使用 `def` 路由或 `async_db_call()` 包装：
 
 ```python
-# 同步上下文（def 路由、脚本、线程池）——无变化，直接用
-users = User.query.filter(User.is_active.is_(True)).all()
+# 推荐：def 路由（最简单）
+@app.get("/users")
+def list_users():
+    return User.query.filter(User.is_active.is_(True)).all()
 
-# async 上下文（async def 路由）——链式不变，终端加 await
+# 需要混合 async I/O 时
 @app.get("/users")
 async def list_users():
-    users = await User.query.filter(User.is_active.is_(True)).all()
-    first = await User.query.filter_by(email=email).first()
-    total = await User.query.filter(User.is_active.is_(True)).count()
-    page  = await User.query.order_by(User.id.desc()).paginate(page=1, size=20)
-    return users
+    users = await async_db_call(
+        lambda: User.query.filter(User.is_active.is_(True)).all()
+    )
+    extra = await some_async_call()
+    return {"users": users, "extra": extra}
 ```
-
-支持的终端方法：`all / first / one / one_or_none / count / get / scalar / delete / update / paginate`。
-HybridQuery 内部通过 `run_in_threadpool` 将同步 SQL 移交线程池执行，同一请求内多次 `await`
-共享同一个 Session（`RequestIDMiddleware` 在请求结束时统一清理）。
-
-**漏写 `await` 的表现**：async 下终端方法返回 `_HybridTerminal` 对象；一旦后续代码访问
-它的属性（如 `users[0].name`）就会在**调用点**抛 `TypeError`，定位比旧方案
-（调用深处抛 `SynchronousOnlyOperation`）更直观。
-
-**回滚开关**：设置环境变量 `YWEB_HYBRID_QUERY=off` 可切回旧行为（async 下 `.query.xxx()`
-不再返回 awaitable，而是原地抛 `SynchronousOnlyOperation`），用于发布初期的紧急回归定位。
 
 ### 10.2 提交策略
 

@@ -77,9 +77,6 @@ from .async_safety import (
     allow_sync,
 )
 
-# HybridQuery —— 同步/异步双模查询代理（Phase 4 起默认挂到 CoreModel.query）
-from .hybrid_query import HybridQuery
-
 # 软删除扩展
 from .orm_extensions import (
     IgnoredTable,
@@ -271,7 +268,6 @@ __all__ = [
     "SynchronousOnlyOperation",
     "check_async_safety",
     "allow_sync",
-    "HybridQuery",
 
     
     # Soft Delete Extensions

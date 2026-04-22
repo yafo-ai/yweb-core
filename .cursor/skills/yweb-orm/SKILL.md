@@ -90,35 +90,33 @@ YWeb ORM 基于 **SQLAlchemy**，采用 **Active Record 模式**：
 
 ## ⚠️ async 安全（必读）
 
-ORM 基于同步 SQLAlchemy Session。`Model.query` 已升级为 **HybridQuery** —— 同步代码零改动，`async def` 路由里**链式不变、终端加 `await`** 即可。写操作（save/commit/add/update/delete）仍走 `def` 路由或 `async_db_call` 包装。
+ORM 基于同步 SQLAlchemy Session。在 `async def` 中直接访问 `Model.query` 会抛出 `SynchronousOnlyOperation`，引导开发者使用安全方式。
 
 | 场景 | 写法 | 安全 |
 |------|------|------|
-| 纯 DB 操作路由（最简） | `def get_users()` → `User.query.all()` | ✅ FastAPI 自动线程池 |
-| async 读路径（**推荐**） | `async def get_users()` → `await User.query.filter(...).all()` | ✅ HybridQuery 自动用线程池 |
-| async 写路径 / 多语句事务 | `async def` + `await async_db_call(func, ...)` | ✅ 手动线程池，同一 request 内共享 session |
+| 纯 DB 操作路由（**推荐**） | `def get_users()` → `User.query.all()` | ✅ FastAPI 自动线程池 |
+| async + 混合 I/O / 写路径 | `async def` + `await async_db_call(func, ...)` | ✅ 手动线程池，同一 request 内共享 session |
 | 启动 / lifespan / 脚本入口 | `with allow_sync():` 或 `with db_session_scope():` | ✅ 临时豁免（`db_session_scope` 在 async 下内部自动 allow_sync） |
-| `async def` 直接调同步 `.query.all()` | `await` 漏了 | ❌ 得到 `_HybridTerminal` 对象，后续属性访问报 `TypeError` |
-| 隐式终端 `for x in query` / `query[i]` / `bool(query)` | 触发 SA 底层自动执行 | ❌ async 下原地抛 `SynchronousOnlyOperation`；**同步下也避免**，改显式 `.all() / 取后 [i] / .count() > 0` |
+| `async def` 直接调 ORM | `User.query.all()` | ❌ 抛 `SynchronousOnlyOperation` |
 
 ```python
-# ✅ 同步路由（最简）：无变化
-@router.get("/users-sync")
-def list_users_sync():
+# ✅ 推荐：def 路由（最简）
+@router.get("/users")
+def list_users():
     return User.query.filter(User.is_active.is_(True)).all()
 
-# ✅ async 读路径（推荐）：HybridQuery，链式不变，终端加 await
-@router.get("/users")
-async def list_users():
-    users  = await User.query.filter(User.is_active.is_(True)).all()
-    first  = await User.query.filter_by(email=email).first()
-    total  = await User.query.filter(User.is_active.is_(True)).count()
-    page   = await User.query.order_by(User.id.desc()).paginate(page=1, size=20)
-    return users
-
-# ✅ async 写 / 多语句 / 批量：async_db_call 兜底
+# ✅ 需要混合 async I/O 时：async_db_call 包装
 from yweb.orm import async_db_call
 
+@router.get("/users")
+async def list_users():
+    users = await async_db_call(
+        lambda: User.query.filter(User.is_active.is_(True)).all()
+    )
+    extra = await some_async_call()
+    return {"users": users, "extra": extra}
+
+# ✅ async 写 / 多语句 / 批量：async_db_call 包装
 @router.post("/users")
 async def create_user(body: UserCreate):
     def _tx():
@@ -128,10 +126,7 @@ async def create_user(body: UserCreate):
     return await async_db_call(_tx)
 ```
 
-**支持的终端**：`all / first / one / one_or_none / count / get / scalar / delete / update / paginate`。
-**回滚开关**：`YWEB_HYBRID_QUERY=off` 可切回旧行为（async 下 `.query.all()` 不再返回 awaitable，而是原地抛 `SynchronousOnlyOperation`，便于回归定位）。
-
-详见 `yweb-core/docs/orm_docs/15_fastapi_integration.md`、`yweb-core/yweb/orm/hybrid_query.py`、`yweb-core/yweb/orm/async_safety.py`。
+详见 `yweb-core/docs/orm_docs/15_fastapi_integration.md`、`yweb-core/yweb/orm/async_safety.py`。
 
 ## 工作流程
 

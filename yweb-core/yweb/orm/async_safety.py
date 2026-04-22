@@ -3,16 +3,6 @@
 检测并阻止在 async 上下文（事件循环线程）中直接调用同步数据库操作，
 防止阻塞事件循环导致并发性能下降和连接池耗尽。
 
-Phase 4 起的角色分工
---------------------
-- **读路径由 HybridQuery 接管**：``CoreModel.query`` 默认挂
-  ``HybridQueryProperty``，``.all() / .first() / ...`` 等终端方法会在
-  async 上下文返回 ``_HybridTerminal`` 供 ``await``，不再在属性访问瞬间抛错。
-- **写路径仍然由本模块把关**：``db_manager.get_session()`` 等直接拿 Session
-  并手写 SQL 的入口继续调 :func:`check_async_safety`，防止阻塞事件循环。
-- :class:`AsyncSafeQueryProperty` **保留**，作为
-  ``YWEB_HYBRID_QUERY=off`` 回退模式下的 fallback 实现（doc 22 §7.4）。
-
 原理：
     asyncio.get_running_loop() 能准确判断当前代码是否运行在事件循环线程上：
     - 能拿到 loop → 在事件循环线程 → 同步 DB 操作会阻塞
@@ -28,10 +18,9 @@ Phase 4 起的角色分工
 
 公开 API:
     - SynchronousOnlyOperation: 异常类
-    - check_async_safety(): 检测函数（写路径主动调用）
-    - is_in_async_context(): 只判断不抛错的 helper（HybridQuery 等内部使用）
+    - check_async_safety(): 检测函数
     - allow_sync(): 上下文管理器，临时允许在 async 中执行同步操作
-    - AsyncSafeQueryProperty: ``YWEB_HYBRID_QUERY=off`` 回退路径用的描述符
+    - AsyncSafeQueryProperty: Model.query 描述符，在 async 上下文中拦截访问
 
 配置：
     通过环境变量 YWEB_ASYNC_SAFETY 控制行为：
@@ -49,7 +38,6 @@ from contextvars import ContextVar
 __all__ = [
     'SynchronousOnlyOperation',
     'check_async_safety',
-    'is_in_async_context',
     'allow_sync',
     'AsyncSafeQueryProperty',
 ]
@@ -163,38 +151,11 @@ def check_async_safety():
         )
 
 
-def is_in_async_context() -> bool:
-    """判断当前是否在事件循环线程中（不抛错、不发警告）。
-
-    与 :func:`check_async_safety` 不同，此函数仅返回布尔值，
-    供需要自定义错误消息的调用方（如 HybridQuery 隐式终端）使用。
-
-    同样尊重 ``YWEB_ASYNC_SAFETY=off`` 与 :func:`allow_sync` 的 bypass。
-    """
-    if _mode == "off":
-        return False
-
-    if _bypass.get():
-        return False
-
-    try:
-        asyncio.get_running_loop()
-        return True
-    except RuntimeError:
-        return False
-
-
 class AsyncSafeQueryProperty:
     """包装 SQLAlchemy 的 query_property，在 async 上下文中拦截访问
 
     当用户在 async def 中访问 Model.query 时，会先执行 async 安全检测，
-    阻止同步查询阻塞事件循环。
-
-    .. note::
-        Phase 4 起，默认路径已切换为
-        :class:`yweb.orm.hybrid_query.HybridQueryProperty`（读路径由
-        HybridQuery 的 terminal 方法按同步/异步上下文分流处理）。
-        本类仅作为 ``YWEB_HYBRID_QUERY=off`` 紧急回退路径保留。
+    抛出 SynchronousOnlyOperation 并给出修复指引（使用 def 路由或 async_db_call）。
     """
 
     def __init__(self, query_property):

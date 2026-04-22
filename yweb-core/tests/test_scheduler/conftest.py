@@ -9,7 +9,7 @@ from sqlalchemy.orm import sessionmaker, scoped_session
 from sqlalchemy.pool import StaticPool
 
 from yweb.orm import CoreModel, BaseModel
-from yweb.orm.hybrid_query import HybridQueryProperty
+from yweb.orm.async_safety import AsyncSafeQueryProperty
 from yweb.scheduler import create_scheduler_models
 
 
@@ -64,18 +64,12 @@ def scheduler_db_session(scheduler_engine, scheduler_models):
     # scopefunc 返回固定值，确保所有调用共享同一 session
     session_scope = scoped_session(SessionLocal, scopefunc=lambda: 0)
     
-    # 设置 CoreModel.query —— 对齐生产路径：用 HybridQueryProperty 包装
-    # Phase 5B.1 之后生效：scheduler.py 的 async _execute_job 已把
-    # history_manager.record_* 全部改成 run_in_threadpool 包装，
-    # 不会再触发"_HybridTerminal 当成 Model 实例"的 bug
-    #
-    # 注意：读取原 query 必须走 __dict__，不能用 getattr()。
-    # 因为上游可能已把 CoreModel.query 设为 query_property/HybridQueryProperty，
-    # getattr 会触发 descriptor.__get__(None, CoreModel)，对抽象基类发起
+    # 注意：读取原 query 必须走 __dict__，不能用 getattr()，
+    # 因为 descriptor.__get__(None, CoreModel) 会对抽象基类发起
     # session.query(CoreModel) → ArgumentError。
     _SENTINEL = object()
     previous_query = CoreModel.__dict__.get("query", _SENTINEL)
-    CoreModel.query = HybridQueryProperty(session_scope.query_property())
+    CoreModel.query = AsyncSafeQueryProperty(session_scope.query_property())
     
     try:
         yield session_scope()

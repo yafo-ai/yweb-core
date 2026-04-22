@@ -1462,10 +1462,9 @@ class Scheduler:
                 return
         
         # 记录执行开始
-        # 注意：record_start 是同步方法，内部走 Model.query.first() 等同步 ORM；
-        # 在 async executor 上下文里必须用 run_in_threadpool 包装，否则 Phase 4
-        # 上线 HybridQueryProperty 后 .first() 会返回 _HybridTerminal，导致
-        # 主键冲突误判 → 5 次重试失败。详见 23 号清单 Phase 5B.1。
+        # record_start 是同步方法，内部走 Model.query.first() 等同步 ORM；
+        # 在 async executor 上下文里必须用 run_in_threadpool 包装，
+        # 避免阻塞事件循环并绕开 AsyncSafeQueryProperty 的拦截。
         history_manager = self._get_history_manager()
         await run_in_threadpool(history_manager.record_start, context)
         

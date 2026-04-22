@@ -337,17 +337,13 @@ class DatabaseManager:
         self._session_scope = scoped_session(self._session_maker, scopefunc=scopefunc)
         
         # 自动设置 ORM query 属性（延迟导入避免循环依赖）
-        # 默认挂 HybridQueryProperty：Model.query 返回 HybridQuery 同步/异步双模代理
-        # 紧急回滚：设置 YWEB_HYBRID_QUERY=off 退回旧的 AsyncSafeQueryProperty 行为
+        # AsyncSafeQueryProperty：在 async 上下文访问 Model.query 时抛出
+        # SynchronousOnlyOperation，引导开发者使用 def 路由或 async_db_call()
         if auto_setup_query:
             from .core_model import CoreModel
-            from .hybrid_query import HybridQueryProperty
-            raw_query_property = self._session_scope.query_property()
-            CoreModel.query = HybridQueryProperty(raw_query_property)
-            logger.info(
-                "CoreModel.query 属性已自动设置（HybridQuery 同步/异步双模；"
-                "YWEB_HYBRID_QUERY=off 可回退旧行为）"
-            )
+            from .async_safety import AsyncSafeQueryProperty
+            CoreModel.query = AsyncSafeQueryProperty(self._session_scope.query_property())
+            logger.info("CoreModel.query 属性已自动设置（AsyncSafeQueryProperty）")
         
         logger.info("数据库session创建成功")
         
@@ -609,8 +605,6 @@ def db_session_scope(
             with db_session_scope(request_id="daily-report") as session:
                 # 同步 ORM 可直接用（scope 内部已 allow_sync bypass）
                 users = User.query.all()
-                # 异步终端也可以混用（HybridQuery 下）
-                count = await User.query.count()
                 ...
 
         # 手动控制提交
