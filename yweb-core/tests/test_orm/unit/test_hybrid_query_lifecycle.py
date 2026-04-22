@@ -213,6 +213,64 @@ class TestLifecycleWithoutMiddleware:
         )
 
 
+# ==================== 7B.1: CancelledError 路径下 middleware finally 覆盖 ====================
+
+
+class TestLifecycleCancelledError:
+    """Phase 7B.1：asyncio.CancelledError（client 断开）路径下中间件 finally 仍清理 session。
+
+    补充 L1（正常完成）/ L2（普通异常）两条路径之外的第三条路径：
+      - 真实场景：客户端在 server 处理中途 disconnect，ASGI 框架向当前任务抛
+        ``asyncio.CancelledError``，若中间件 ``finally`` 子句不执行 ``on_request_end()``，
+        主协程 scope 上的 session 就泄漏。
+      - 本测试不走 TestClient（同步客户端对 CancelledError 的模拟行为依赖框架版本），
+        而是直接构造 ASGI 调用：手写 scope / receive / send + 一个 fake app，
+        app 内先开 session 再 raise CancelledError，验证 middleware finally 仍清 session。
+    """
+
+    @pytest.mark.asyncio
+    async def test_cancelled_error_still_triggers_on_request_end(self, db_setup):
+        """7B.1：请求内部先建 session → 抛 CancelledError → middleware finally 清理"""
+        from yweb.middleware import RequestIDMiddleware
+
+        from yweb.orm.async_safety import allow_sync
+
+        async def fake_app(scope, receive, send):
+            # 在主协程 scope 建 session（现实里通常通过 HybridQuery 终端建，此处用
+            # allow_sync 直接显式建，避免 run_in_threadpool 把 session 创到 worker scope
+            # 导致测试断言与现象错位）
+            with allow_sync():
+                _ = db_manager.get_session()
+            assert _registry_has() is True, "前置：主协程 scope 应有 session"
+            raise asyncio.CancelledError("simulated client disconnect")
+
+        mw = RequestIDMiddleware(fake_app)
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/cancelled",
+            "headers": [],
+            "query_string": b"",
+        }
+
+        async def _receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        sent: list = []
+
+        async def _send(msg):
+            sent.append(msg)
+
+        with pytest.raises(asyncio.CancelledError):
+            await mw(scope, _receive, _send)
+
+        # finally 跑完 → 主协程 scope session 被清理
+        assert _registry_has() is False, (
+            "CancelledError 路径下中间件 finally 未清理主协程 session —— "
+            "生产环境中表现为 client 断开造成连接池泄漏"
+        )
+
+
 # ==================== L6: 脚本入口 db_session_scope + await ====================
 
 class TestLifecycleScriptEntry:

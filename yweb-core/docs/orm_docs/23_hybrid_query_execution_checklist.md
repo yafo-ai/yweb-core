@@ -465,7 +465,11 @@ commit `0a5e5a8` 已把生产 async 路由批量改为 def；Phase 0 扫描也�
 
 ### 其余两项（7B.1 / 7B.2）继续延后到本 phase 后续独立 commit
 
-- [ ] **7B.1** `asyncio.CancelledError` 路径下中间件 `finally` 的 session 清理覆盖（待做）
+- [x] **7B.1** `asyncio.CancelledError` 路径下中间件 `finally` 的 session 清理覆盖  ✅ 2026-04-22
+  - 新增 `TestLifecycleCancelledError::test_cancelled_error_still_triggers_on_request_end` 到 `tests/test_orm/unit/test_hybrid_query_lifecycle.py`
+  - 实现方式：不走 TestClient（同步客户端对 CancelledError 的模拟依赖框架版本），而是直接构造 ASGI 调用 —— 手写 scope / receive / send + fake app，app 内用 `allow_sync()` 开主协程 scope 的 session，再 `raise asyncio.CancelledError`；middleware 的 `try/finally` 跑完后断言 `_registry_has() is False`
+  - 价值：L1（正常）/ L2（普通异常）/ 7B.1（CancelledError）三条路径现在全部覆盖
+  - 回归：`test_hybrid_query_lifecycle.py` 11/11 绿（vs 基线 10 正好 +1），未触及生产代码
 - [ ] **7B.2** 连接池压测（待做）
 
 **Phase 7B 是否发版前必须完成**：否。这些是**稳定性加固**而不是功能正确性；发版可以不等 7B 完成，但发版后 1 个迭代内应收口。
@@ -575,3 +579,4 @@ commit `0a5e5a8` 已把生产 async 路由批量改为 def；Phase 0 扫描也�
 | 2026-04-21 | 执行 Phase 7（文档部分）— 发布与回滚预案闭环：⑴ 把 `assets/upstream_rundb_migration.md` 从「仅 `run_db` 改名迁移」扩展为完整的「yweb-core 2026-04 升级指南」（文件名保留以不破坏旧 commit 引用），顶部加「本次升级一览」表（可作为 CHANGELOG 雏形）；⑵ 新增「可选升级：async 读路径改用 HybridQuery 范式」大章（扫描命令 / 决策树 / 4 组改法示例 / 不改的情形 / 回归验证）；⑶ 新增「紧急回滚预案」三级（环境变量 → 双开关 → git revert 倒序）+「什么时候该回滚」5 类现象决策表；⑷ 新增「兼容矩阵」7 类老写法行为对照表；⑸ 23 号清单 Phase 7.3 / 7.4 勾选，7.1（版本号 bump）与 7.2（CHANGELOG 首建）标「延后到实际发版节点」并写理由；⑹ 新建 Phase 7B 把 Phase 5 延期的补测（CancelledError / 连接池压测 / lazy trap / `lazy='dynamic'` / `DetachedInstanceError`）独立跟踪，发版前非必须完成。全量回归 **2698 passed / 0 failed / 0 errors**（纯 md，零回归） |
 | 2026-04-22 | 执行 Phase 7B.3/7B.4/7B.5 — 边缘 trap 固化测试：新增 `tests/test_orm/unit/test_hybrid_query_edge_cases.py` 7 条测试（3 lazy lifecycle + 1 async joinedload e2e + 3 `lazy='dynamic'` 固化），合并做是因为三者共享 Author/Post + Team/Member 关系模型。**意外收获**：7B.4 的 async 测试暴露生产 trap「Phase 7B 发现项 1」——`primary_key_generators.py:290` 在 async 上下文直接 `.query.first()` 会返回 `_HybridTerminal` 被误判为冲突，死循环重试（性质同 Phase 5B scheduler bug）。本轮测试绕开（seed 留 sync）、生产 bug 留独立 commit 修。组合回归 `test_orm/ + test_scheduler/` **1072 passed**（vs 基线 1065 正好 +7）。7B.1（CancelledError 覆盖）/ 7B.2（连接池压测）延后至后续独立 commit |
 | 2026-04-22 | 修复 Phase 7B 发现项 1 — 主键生成器在 async 上下文的死循环：`yweb/orm/primary_key_generators.py::PrimaryKeyGenerator.generate_with_retry` 的冲突检测查询外层加 `with allow_sync():`（从 `.async_safety` 延迟导入），解决「async def 里裸 `save()` → `.query.first()` 返回 `_HybridTerminal` 被判冲突 → `RuntimeError: 生成主键失败`」的误导性错误路径。新增 `TestPrimaryKeyInAsyncContext` 类 2 条回归测试追加到 `test_hybrid_query_edge_cases.py`（单次 save 落库闭环 + 3 连 save id 唯一）。组合回归 `test_orm/ + test_scheduler/` **1074 passed**（vs 上一轮 1072 正好 +2），零回归。**修复不代表推荐**此种写法 —— 它仍阻塞事件循环；修复的价值是框架不再抛一个指向错误方向的 RuntimeError |
+| 2026-04-22 | 执行 Phase 7B.1 — CancelledError 路径中间件 finally 覆盖：新增 `TestLifecycleCancelledError::test_cancelled_error_still_triggers_on_request_end` 到 `tests/test_orm/unit/test_hybrid_query_lifecycle.py`。不走 TestClient（同步客户端的 CancelledError 模拟依赖框架版本），改为直接构造 ASGI 调用：手写 scope / receive / send + fake app，app 内用 `allow_sync()` 开主协程 scope 的 session，再 `raise asyncio.CancelledError`；断言 middleware finally 跑完后 `_registry_has() is False`。L1（正常）/ L2（普通异常）/ 7B.1（CancelledError）三条路径至此全覆盖。单文件回归 11/11 绿（vs 基线 10 正好 +1），未触及生产代码 |
