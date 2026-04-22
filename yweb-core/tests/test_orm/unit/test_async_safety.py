@@ -9,9 +9,11 @@
     2. 错误信息包含修复指导（def 路由 + async_db_call 两种方式）
     3. 同步上下文 → 正常放行
     4. async_db_call() 包装 → 正常放行
-    5. YWEB_ASYNC_SAFETY=off → 禁用检测
-    6. YWEB_ASYNC_SAFETY=warn → 警告但不报错
-    7. 异常类型继承关系
+    5. async_db_call() *args/**kwargs 透传 → 参数正确传递
+    6. async_db_call() 内函数抛异常 → 异常正确传播到调用方
+    7. YWEB_ASYNC_SAFETY=off → 禁用检测
+    8. YWEB_ASYNC_SAFETY=warn → 警告但不报错
+    9. 异常类型继承关系
 
   FastAPI 集成测试:
     8.  async def 路由直接调 ORM → 500
@@ -117,6 +119,27 @@ class TestAsyncSafetyDetection:
             await async_db_call(check_async_safety)
 
         asyncio.run(_run())
+
+    def test_async_db_call_passes_args_and_kwargs(self):
+        """async_db_call 应正确透传位置参数和关键字参数给被调用函数"""
+        def add(a, b, extra=0):
+            return a + b + extra
+
+        async def _run():
+            return await async_db_call(add, 1, 2, extra=10)
+
+        assert asyncio.run(_run()) == 13
+
+    def test_async_db_call_propagates_exception(self):
+        """async_db_call 内函数抛出的异常应正确传播到 async 调用方"""
+        def failing():
+            raise ValueError("数据库操作失败")
+
+        async def _run():
+            await async_db_call(failing)
+
+        with pytest.raises(ValueError, match="数据库操作失败"):
+            asyncio.run(_run())
 
     def test_mode_off_disables_detection(self):
         """YWEB_ASYNC_SAFETY=off 应完全禁用检测"""

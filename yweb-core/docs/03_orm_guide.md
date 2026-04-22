@@ -1157,7 +1157,11 @@ with ThreadPoolExecutor(max_workers=5) as executor:
 | 线程池任务 | `db_session_scope()` 或 `@with_db_session()` |
 
 > 纯 DB 操作推荐 `def` 路由（FastAPI 自动放入线程池）。需要混合 async I/O 时使用
-> `await async_db_call(...)` 包装。详见 [数据库会话文档](orm_docs/12_db_session.md)。
+> `await async_db_call(...)` 包装。
+>
+> **注意**：`async_db_call()` 仅适用于 FastAPI 请求处理路由（由 middleware 管理 session）。
+> `BackgroundTasks`、定时任务、脚本等非请求上下文中应使用 `db_session_scope()` 自行管理 session。
+> 详见 [数据库会话文档](orm_docs/12_db_session.md)。
 
 ### 10.1.1 async 路由中使用 ORM
 
