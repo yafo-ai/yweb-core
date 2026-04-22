@@ -470,7 +470,14 @@ commit `0a5e5a8` 已把生产 async 路由批量改为 def；Phase 0 扫描也�
   - 实现方式：不走 TestClient（同步客户端对 CancelledError 的模拟依赖框架版本），而是直接构造 ASGI 调用 —— 手写 scope / receive / send + fake app，app 内用 `allow_sync()` 开主协程 scope 的 session，再 `raise asyncio.CancelledError`；middleware 的 `try/finally` 跑完后断言 `_registry_has() is False`
   - 价值：L1（正常）/ L2（普通异常）/ 7B.1（CancelledError）三条路径现在全部覆盖
   - 回归：`test_hybrid_query_lifecycle.py` 11/11 绿（vs 基线 10 正好 +1），未触及生产代码
-- [ ] **7B.2** 连接池压测（待做）
+- [x] **7B.2** 连接池压测  ✅ 2026-04-22
+  - 新建 `tests/test_orm/integration/test_hybrid_query_pool.py::TestHybridQueryConcurrentPool`（2 条）
+  - 实现方式：独立 file sqlite + QueuePool（pool_size=3, max_overflow=2, pool_timeout=10s），挂 `HybridQueryProperty`（`init_database` 自动）+ `RequestIDMiddleware`，用 `httpx.AsyncClient` + `ASGITransport` 并发发真实 HTTP 请求，每个路由里 `await Model.query.count()`
+  - 覆盖两档并发：
+    - `test_concurrent_hybrid_await_releases_connections`：concurrency=10（= pool 上限 5 + 5 排队余量），验证全部 200 + 最终 `checkedout()==0`
+    - `test_burst_exceeding_pool_capacity_still_drains`：burst=15（3× 容量），验证 pool 排队机制下仍不 500、归零
+  - 价值：固化 HybridQuery 在"多请求并发 await 终端"下连接池回收正常 —— 防止将来改动（例如重构 `on_request_end` 或 `_HybridTerminal.__await__`）引入连接泄漏回归
+  - 回归：`tests/test_orm/integration/` 全量 32 passed（vs 基线 30 正好 +2），1m45s，未触及生产代码
 
 **Phase 7B 是否发版前必须完成**：否。这些是**稳定性加固**而不是功能正确性；发版可以不等 7B 完成，但发版后 1 个迭代内应收口。
 
@@ -580,3 +587,4 @@ commit `0a5e5a8` 已把生产 async 路由批量改为 def；Phase 0 扫描也�
 | 2026-04-22 | 执行 Phase 7B.3/7B.4/7B.5 — 边缘 trap 固化测试：新增 `tests/test_orm/unit/test_hybrid_query_edge_cases.py` 7 条测试（3 lazy lifecycle + 1 async joinedload e2e + 3 `lazy='dynamic'` 固化），合并做是因为三者共享 Author/Post + Team/Member 关系模型。**意外收获**：7B.4 的 async 测试暴露生产 trap「Phase 7B 发现项 1」——`primary_key_generators.py:290` 在 async 上下文直接 `.query.first()` 会返回 `_HybridTerminal` 被误判为冲突，死循环重试（性质同 Phase 5B scheduler bug）。本轮测试绕开（seed 留 sync）、生产 bug 留独立 commit 修。组合回归 `test_orm/ + test_scheduler/` **1072 passed**（vs 基线 1065 正好 +7）。7B.1（CancelledError 覆盖）/ 7B.2（连接池压测）延后至后续独立 commit |
 | 2026-04-22 | 修复 Phase 7B 发现项 1 — 主键生成器在 async 上下文的死循环：`yweb/orm/primary_key_generators.py::PrimaryKeyGenerator.generate_with_retry` 的冲突检测查询外层加 `with allow_sync():`（从 `.async_safety` 延迟导入），解决「async def 里裸 `save()` → `.query.first()` 返回 `_HybridTerminal` 被判冲突 → `RuntimeError: 生成主键失败`」的误导性错误路径。新增 `TestPrimaryKeyInAsyncContext` 类 2 条回归测试追加到 `test_hybrid_query_edge_cases.py`（单次 save 落库闭环 + 3 连 save id 唯一）。组合回归 `test_orm/ + test_scheduler/` **1074 passed**（vs 上一轮 1072 正好 +2），零回归。**修复不代表推荐**此种写法 —— 它仍阻塞事件循环；修复的价值是框架不再抛一个指向错误方向的 RuntimeError |
 | 2026-04-22 | 执行 Phase 7B.1 — CancelledError 路径中间件 finally 覆盖：新增 `TestLifecycleCancelledError::test_cancelled_error_still_triggers_on_request_end` 到 `tests/test_orm/unit/test_hybrid_query_lifecycle.py`。不走 TestClient（同步客户端的 CancelledError 模拟依赖框架版本），改为直接构造 ASGI 调用：手写 scope / receive / send + fake app，app 内用 `allow_sync()` 开主协程 scope 的 session，再 `raise asyncio.CancelledError`；断言 middleware finally 跑完后 `_registry_has() is False`。L1（正常）/ L2（普通异常）/ 7B.1（CancelledError）三条路径至此全覆盖。单文件回归 11/11 绿（vs 基线 10 正好 +1），未触及生产代码 |
+| 2026-04-22 | 执行 Phase 7B.2 — 连接池并发压测：新建 `tests/test_orm/integration/test_hybrid_query_pool.py::TestHybridQueryConcurrentPool` 2 条测试（concurrency=10 正好打满 pool 容量 + 余量，burst=15 超过 3× 容量）。独立 file sqlite + QueuePool（pool_size=3, max_overflow=2, pool_timeout=10s）+ `RequestIDMiddleware` + `httpx.AsyncClient(ASGITransport)` 发真实并发 HTTP 请求，每个路由里 `await Model.query.count()`，验证所有请求 200 + 最终 `pool.checkedout()==0`。`tests/test_orm/integration/` 全量 32 passed（vs 基线 30 正好 +2），未触及生产代码。**Phase 7B 至此全部完成**：7B.3/4/5 edge cases（2281e23）+ 发现项 1（2df342e）+ 7B.1（a271969）+ 7B.2（本 commit） |
