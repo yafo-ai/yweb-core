@@ -424,19 +424,45 @@ commit `0a5e5a8` 已把生产 async 路由批量改为 def；Phase 0 扫描也�
   - 条件：`concurrency = pool_size + max_overflow + 5`，`engine.pool.checkedout() == 0` 恢复
   - 测试：切 `QueuePool` + 文件 SQLite，gather 起 25 个 await 终端，全部返回后验证池清零
   - 预估：新增 1 条集成测试，`tests/test_orm/integration/test_hybrid_query_pool.py` 新建
-- [ ] **7B.3** Lazy 加载 trap 示例
-  - 正例：`joinedload` 在 async 终端里一次性取齐
-  - 反例：async 终端返回后在 coroutine 里访问关系属性 → `DetachedInstanceError`（或 `SynchronousOnlyOperation`，因 session 已被 `on_request_end` 关闭）
-  - 测试：各 1 条，加在 lifecycle 测试里；文档侧链接到 04_query_and_filter.md
-- [ ] **7B.4** `lazy='dynamic'` 覆盖
-  - 确认 AppenderQuery 在 HybridQuery 路径下的行为（不走 `CoreModel.query`，应该是透传 SA 原生）
-  - 如果无法 await（AppenderQuery 不是 HybridQuery），文档侧需要警示
-  - 测试：1 条负面测试固化当前行为
-- [ ] **7B.5** `DetachedInstanceError` 处理策略
-  - 归纳「什么时候会抛 / 怎么规避」（常见于 async 终端返回后在协程里继续访问关系）
-  - 测试：1 条显性捕获 + 1 条正确使用方法对照
+- [x] **7B.3** Lazy 加载 trap 示例  ✅ 2026-04-22
+  - 新增 `tests/test_orm/unit/test_hybrid_query_edge_cases.py` 合并实现 7B.3/7B.4/7B.5（三者共享 Author/Post + Team/Member 关系模型）
+  - **7B.3 交付**：3 条测试
+    - `test_lazy_load_within_live_session_works`：sync session 活着时懒加载正常（基线）
+    - `test_access_relationship_after_session_closed_raises_detached`：session 关闭后访问未预载关系 → `DetachedInstanceError`（反例）
+    - `test_async_route_with_joinedload_returns_relations`：async def + `joinedload` + TestClient 端到端，JSON 返回齐整（正例）
+  - 文档侧：04_query_and_filter.md 的「async 路由下的查询写法」章节已有 joinedload 引导，本次未再叠加（避免重复）
+- [x] **7B.4** `lazy='dynamic'` 固化  ✅ 2026-04-22
+  - **3 条测试**（同一文件 `TestLazyDynamicIsAppenderNotHybrid`）：
+    - `test_dynamic_relation_returns_sa_appender_query`：`team.members` 是 SA 原生 Query 子类，**不是** HybridQuery
+    - `test_dynamic_relation_terminal_returns_python_native`：AppenderQuery `.all()/.count()` 直接返回 list/int（不是 `_HybridTerminal`）
+    - `test_dynamic_relation_terminal_await_on_list_raises_typeerror`：对 list 做 await 必然 TypeError；用 `asyncio.run` 模拟，避开「Phase 7B 发现项 1」的生产 trap
+  - 结论：HybridQuery **不**覆盖 relationship 级别的 AppenderQuery。未来若有人用 `lazy='dynamic'`，他需要走 `options(joinedload(...))` 或 `await async_db_call(lambda: team.members.filter(...).all())`
+- [x] **7B.5** `DetachedInstanceError` 处理策略  ✅ 2026-04-22
+  - 与 7B.3 合并实现，共 2 条对照测试（`TestLazyLoadSessionLifecycle`）：
+    - 反例：`test_access_relationship_after_session_closed_raises_detached`（session 关闭 + 未预载 → 抛）
+    - 正例：`test_joinedload_keeps_relationship_accessible_after_session_closed`（joinedload 预载 → 关闭后仍可访问）
 
-**Phase 7B 验收**：所有新增测试独立绿；新增知识点已回流到 04/05/12/15 其中某一个用户手册章节；不影响既有测试数量（预期 2698 → 2708 左右）。
+**Phase 7B（3/5）交付**：`test_hybrid_query_edge_cases.py` 7 条测试全绿；全量跨模块回归 **1072 passed**（`tests/test_orm/ + tests/test_scheduler/`），无污染。
+
+### Phase 7B 发现项 1（生产 trap，同 Phase 5B 性质） —— 主键生成器在 async 上下文死循环
+
+- **位置**：`yweb/orm/primary_key_generators.py:290`
+  ```python
+  existing = model_class.query.filter_by(id=new_id).first()
+  if existing is None:
+      return new_id
+  ```
+- **现象**：在 `async def` 里**不套** `db_session_scope` / `async_db_call` 直接 `Model(name=...).save()`，`before_insert` 钩子调用 `.query.first()` 在 async 上下文返回 `_HybridTerminal`（不是 `None`），被判为「主键冲突」→ 死循环重试 → `RuntimeError: 生成主键失败：5次尝试后仍然冲突`
+- **触发条件**：与 Phase 5B 的 scheduler 同性质 —— 生产代码在 async 上下文直接调同步 `.query.first()`，返回 `_HybridTerminal` 被误判
+- **为何此前未暴露**：所有已知 async + save 场景都走 `db_session_scope`（Phase 5B.2 后内部自动 `allow_sync`）或 `async_db_call`，两条路径都绕开 async 检测。直接在 `async def` 里裸 `save()` 本就不是推荐写法，文档也劝退
+- **影响范围**：中等 —— 不会静默错误，用户会看到明确的 `RuntimeError`；但错误信息指向「主键冲突」而不是真因（async 上下文误判），debug 成本高
+- **处置（不在本 commit）**：独立 commit 修 `primary_key_generators.py:290`，用 `with allow_sync():` 或 `is_in_async_context()` 走 sync 路径；新增回归测试覆盖「async def 直接 save」场景。预估：3 行改动 + 1 条回归测试
+- **本轮绕开方式**：`test_dynamic_relation_terminal_await_on_list_raises_typeerror` 把 seed 留在 sync fixture，async 只在 `asyncio.run(_oops())` 里跑 `await list`；不触及 pk_generator
+
+### 其余两项（7B.1 / 7B.2）继续延后到本 phase 后续独立 commit
+
+- [ ] **7B.1** `asyncio.CancelledError` 路径下中间件 `finally` 的 session 清理覆盖（待做）
+- [ ] **7B.2** 连接池压测（待做）
 
 **Phase 7B 是否发版前必须完成**：否。这些是**稳定性加固**而不是功能正确性；发版可以不等 7B 完成，但发版后 1 个迭代内应收口。
 
@@ -543,3 +569,4 @@ commit `0a5e5a8` 已把生产 async 路由批量改为 def；Phase 0 扫描也�
 | 2026-04-21 | 执行 Phase 5B.3 — `tests/test_scheduler/unit/` 跨模块 metadata 污染修复：根因 = `TestCreateSchedulerModels` / `TestFactoryExtra` 调 `create_scheduler_models()` / `setup_scheduler(app=...)` 无前缀时把 `scheduler_job` 等表永久注册进 `BaseModel.metadata`，叠加 `_create_model_class` 的 `extend_existing=True` 导致 Index 累加，后续 test_orm 的 `create_all(新 engine)` 报 `index ... already exists`。修复 = 两个类各加 `@pytest.fixture(autouse=True) _isolate_metadata`（metadata 快照 + teardown 移除新增表）。从 6 failed / 515 errors → `test_scheduler/ + test_orm/unit/` 组合 **1035 passed**；全量回归 **2698 passed / 0 failed / 0 errors**，与 5B.2 基线零差异。**Phase 5B 全部完成** |
 | 2026-04-21 | 执行 Phase 6 — 文档范式升级：把 async 读路径首选从「`async_db_call(lambda: ...)`」升级为「`await Model.query.xxx()`」，`async_db_call` 降级为写路径 / 多语句事务 / 混合 async I/O 兜底。改动 8 个入口：`.cursor/rules/yweb-orm.mdc`、`.cursor/skills/yweb-orm/SKILL.md`、`docs/03_orm_guide.md`（新增 §10.1.1 HybridQuery 首选小节）、`docs/orm_docs/12_db_session.md`（推荐方式 / 场景选择表 / Q8 重写）、`docs/orm_docs/15_fastapi_integration.md`（路由对比表 + 读/写场景示例）、`docs/orm_docs/04_query_and_filter.md`（页尾 async 写法）、`docs/orm_docs/05_pagination.md`（paginate 的 await 用法）、`docs/orm_docs/README.md`（banner + 功能矩阵 + 模块树注释）。所有改动用统一 4 句话模板（HybridQuery 读 / async_db_call 写 / def 路由最简 / `YWEB_HYBRID_QUERY=off` 回滚）。6.9 README_DEV.md 与 6.10 ASYNC_SYNC_ORM_GUIDE.md 评估后不做。全量回归 **2698 passed / 0 failed / 0 errors**，与 Phase 5B.3 基线完全一致（纯 md，零回归） |
 | 2026-04-21 | 执行 Phase 7（文档部分）— 发布与回滚预案闭环：⑴ 把 `assets/upstream_rundb_migration.md` 从「仅 `run_db` 改名迁移」扩展为完整的「yweb-core 2026-04 升级指南」（文件名保留以不破坏旧 commit 引用），顶部加「本次升级一览」表（可作为 CHANGELOG 雏形）；⑵ 新增「可选升级：async 读路径改用 HybridQuery 范式」大章（扫描命令 / 决策树 / 4 组改法示例 / 不改的情形 / 回归验证）；⑶ 新增「紧急回滚预案」三级（环境变量 → 双开关 → git revert 倒序）+「什么时候该回滚」5 类现象决策表；⑷ 新增「兼容矩阵」7 类老写法行为对照表；⑸ 23 号清单 Phase 7.3 / 7.4 勾选，7.1（版本号 bump）与 7.2（CHANGELOG 首建）标「延后到实际发版节点」并写理由；⑹ 新建 Phase 7B 把 Phase 5 延期的补测（CancelledError / 连接池压测 / lazy trap / `lazy='dynamic'` / `DetachedInstanceError`）独立跟踪，发版前非必须完成。全量回归 **2698 passed / 0 failed / 0 errors**（纯 md，零回归） |
+| 2026-04-22 | 执行 Phase 7B.3/7B.4/7B.5 — 边缘 trap 固化测试：新增 `tests/test_orm/unit/test_hybrid_query_edge_cases.py` 7 条测试（3 lazy lifecycle + 1 async joinedload e2e + 3 `lazy='dynamic'` 固化），合并做是因为三者共享 Author/Post + Team/Member 关系模型。**意外收获**：7B.4 的 async 测试暴露生产 trap「Phase 7B 发现项 1」——`primary_key_generators.py:290` 在 async 上下文直接 `.query.first()` 会返回 `_HybridTerminal` 被误判为冲突，死循环重试（性质同 Phase 5B scheduler bug）。本轮测试绕开（seed 留 sync）、生产 bug 留独立 commit 修。组合回归 `test_orm/ + test_scheduler/` **1072 passed**（vs 基线 1065 正好 +7）。7B.1（CancelledError 覆盖）/ 7B.2（连接池压测）延后至后续独立 commit |
