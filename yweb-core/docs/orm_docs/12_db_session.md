@@ -650,12 +650,25 @@ result = await async_db_call(func, *args, **kwargs)
 
 ### async_db_call 的使用边界
 
-`async_db_call()` 专为 **FastAPI 请求处理路由** 设计。它只做一件事：把同步函数放到线程池执行。
+`async_db_call()` 专为 **FastAPI HTTP 请求处理** 设计。它只做一件事：把同步函数放到线程池执行。
 它**不管理 session 生命周期**——session 的创建和清理由 `RequestIDMiddleware`（或 `get_db()`）负责。
 
-因此，在以下非 HTTP 场景中**不应使用** `async_db_call()`：
+#### ✅ BackgroundTasks 中使用（安全）
 
-#### ❌ BackgroundTasks 中使用
+`RequestIDMiddleware` 是纯 ASGI 中间件，`await self.app(scope, receive, send)` 涵盖了整个
+ASGI 生命周期（包括 BackgroundTasks）。`on_request_end()` 在 BackgroundTasks **执行完毕后**才调用：
+
+```
+请求进入
+  → middleware: _set_request_id("abc-123")
+  → await self.app(scope, receive, send)    ← 整个 ASGI 生命周期
+  │   ├── 路由 handler 执行，注册 BackgroundTask
+  │   ├── 响应 body 发送（客户端已收到）
+  │   └── BackgroundTask 执行               ← session 仍在，request_id 仍为 "abc-123"
+  → finally: on_request_end()               ← 最后才清理
+```
+
+因此在 BackgroundTasks 中使用 `async_db_call` 是安全的，session 由 middleware 统一清理：
 
 ```python
 @app.post("/send-report")
@@ -663,59 +676,44 @@ async def send_report(background_tasks: BackgroundTasks):
     background_tasks.add_task(generate_report)
     return {"status": "accepted"}
 
-# ❌ 危险：BackgroundTask 执行时，RequestIDMiddleware 已经调用了 on_request_end()，
-#    原请求的 session 已被清理。async_db_call 在新线程中创建的 session 无人管理，
-#    导致连接泄漏。
+# ✅ 安全：BackgroundTask 执行期间仍在 middleware 的 ASGI 生命周期内
 async def generate_report():
-    users = await async_db_call(User.get_all)  # session 泄漏！
-```
-
-BackgroundTask 的执行时机在 middleware 清理之后：
-
-```
-请求进入 → middleware 设置 session
-  → 路由 handler 执行，注册 BackgroundTask
-  → 响应发送
-  → middleware finally → on_request_end() 清理 session   ← 此时 session 已销毁
-  → BackgroundTask 开始执行                              ← 这里用 async_db_call 拿不到原 session
-```
-
-**正确做法**：在后台任务中用 `db_session_scope()` 建立独立的 session 上下文：
-
-```python
-# ✅ 正确：后台任务自行管理 session 生命周期
-def generate_report():
-    with db_session_scope(request_id="bg-report") as session:
-        users = User.query.filter_by(is_active=True).all()
-        # 生成报表...
-    # 自动 commit + 清理
-```
-
-#### ❌ 脚本 / CLI 的 async 入口中使用
-
-```python
-# ❌ 能跑但不推荐：session 无人清理，且完全没必要绕线程池
-async def main():
-    init_database("sqlite:///app.db")
     users = await async_db_call(User.get_all)
+    # ... 生成报表
+```
 
-# ✅ 正确：db_session_scope 在 async 下内部自动 allow_sync，可直接用同步 ORM
-async def main():
+> **注意**：这依赖于 `RequestIDMiddleware` 的纯 ASGI 实现（非 `BaseHTTPMiddleware`）。
+> 如果使用 `BaseHTTPMiddleware`，`call_next()` 会创建新的任务上下文，
+> ContextVar 传播和清理时机都会不同，BackgroundTasks 中的 session 可能泄漏。
+
+#### ❌ 非 HTTP 请求上下文中使用
+
+在没有 `RequestIDMiddleware` 的 async 上下文中（脚本、定时任务等），
+`async_db_call` 在线程池创建的 session 无人清理，会导致连接泄漏：
+
+```python
+# ❌ 能跑但不推荐：没有 middleware，session 无人清理
+async def standalone_job():
+    init_database("sqlite:///app.db")
+    users = await async_db_call(User.get_all)  # session 泄漏！
+
+# ✅ 正确：db_session_scope 自行管理 session，async 下内部自动 allow_sync
+async def standalone_job():
     init_database("sqlite:///app.db")
     with db_session_scope(request_id="cli-export") as session:
         users = User.query.filter_by(is_active=True).all()
 ```
 
-脚本中没有 `RequestIDMiddleware`，`async_db_call` 在线程池创建的 session 不会被清理。
-而且脚本本身就不需要绕线程池——`db_session_scope()` 已经处理了 async 上下文的兼容性。
+> `async_db_call` 会在运行时检测此场景并输出警告日志，但不会阻止执行。
+> 看到警告时请改用 `db_session_scope()`。
 
 #### 总结
 
 | 场景 | `async_db_call` | `db_session_scope` | 原因 |
 |------|:-:|:-:|------|
 | FastAPI `async def` 路由 | ✅ | — | middleware 管理 session |
-| BackgroundTasks | ❌ | ✅ | 请求 session 已清理 |
-| 定时任务 | ❌ | ✅ | 无 HTTP 上下文 |
+| BackgroundTasks | ✅ | — | 仍在 middleware ASGI 生命周期内 |
+| 定时任务 | ❌ | ✅ | 无 HTTP 请求上下文 |
 | 脚本 / CLI | ❌ | ✅ | 无 middleware |
 
 ### 场景选择指南
@@ -725,8 +723,8 @@ async def main():
 | `def` 路由（纯 DB） | `def` 路由 + `.query.xxx()` | 最简单，FastAPI 自动线程池 |
 | `async def` 路由 — 需要 async I/O | `await async_db_call(func)` | 写操作 / 混合 I/O |
 | `async def` 路由 — 写路径 / 多语句 | `async def` + `await async_db_call(func)` | 写操作批量共享一个 session |
-| BackgroundTasks / 后台任务 | `db_session_scope()` | 请求 session 已清理，需独立管理 |
-| 脚本/定时任务（含 async） | `db_session_scope()` / `@with_db_session` | 非 HTTP 场景（`db_session_scope` 在 async 下内部自动 `allow_sync`） |
+| BackgroundTasks | `async_db_call()` 或 `db_session_scope()` | 均安全，前者更简洁 |
+| 脚本/定时任务（含 async） | `db_session_scope()` / `@with_db_session` | 非 HTTP 请求上下文，需自行管理 session |
 | 测试代码 | 直接调用（非 async 上下文） | 检测自动放行 |
 
 ## 常见问题

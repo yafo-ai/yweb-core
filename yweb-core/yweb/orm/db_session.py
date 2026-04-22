@@ -742,6 +742,10 @@ async def async_db_call(func: Callable[..., T], *args, **kwargs) -> T:
     当你需要在 async def 路由中调用同步的 ORM 操作时使用此函数。
     内部通过 Starlette 的 run_in_threadpool 将同步调用移交到线程池执行。
 
+    此函数依赖 ``RequestIDMiddleware`` 管理 session 生命周期。
+    在非 HTTP 请求上下文（定时任务、脚本等）中调用会输出警告日志，
+    此时应改用 ``db_session_scope()``。
+
     .. note::
         如果路由不涉及其他 async I/O，推荐直接使用 ``def`` 路由——
         FastAPI 会自动将同步路由放入线程池，无需手动包裹。
@@ -777,5 +781,13 @@ async def async_db_call(func: Callable[..., T], *args, **kwargs) -> T:
             )
             return [u.to_dict() for u in users]
     """
+    if not db_manager._request_id_explicit.get():
+        func_name = getattr(func, '__name__', None) or getattr(func, '__qualname__', repr(func))
+        _logger.warning(
+            "async_db_call(%s) 在非 HTTP 请求上下文中调用，"
+            "session 不会被自动清理，可能导致连接泄漏。"
+            "建议使用 db_session_scope() 管理 session。",
+            func_name,
+        )
     from starlette.concurrency import run_in_threadpool
     return await run_in_threadpool(func, *args, **kwargs)

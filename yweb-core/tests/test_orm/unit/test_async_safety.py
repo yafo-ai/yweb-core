@@ -11,9 +11,10 @@
     4. async_db_call() 包装 → 正常放行
     5. async_db_call() *args/**kwargs 透传 → 参数正确传递
     6. async_db_call() 内函数抛异常 → 异常正确传播到调用方
-    7. YWEB_ASYNC_SAFETY=off → 禁用检测
-    8. YWEB_ASYNC_SAFETY=warn → 警告但不报错
-    9. 异常类型继承关系
+    7. async_db_call() 非 HTTP 请求上下文 → 输出警告日志
+    8. YWEB_ASYNC_SAFETY=off → 禁用检测
+    9. YWEB_ASYNC_SAFETY=warn → 警告但不报错
+    10. 异常类型继承关系
 
   FastAPI 集成测试:
     8.  async def 路由直接调 ORM → 500
@@ -25,6 +26,7 @@
 """
 
 import asyncio
+import unittest.mock
 
 import pytest
 from sqlalchemy import Column, String, create_engine
@@ -140,6 +142,22 @@ class TestAsyncSafetyDetection:
 
         with pytest.raises(ValueError, match="数据库操作失败"):
             asyncio.run(_run())
+
+    def test_async_db_call_warns_outside_http_context(self):
+        """非 HTTP 请求上下文中调用 async_db_call 应输出警告日志"""
+        from yweb.orm.db_session import db_manager
+
+        assert not db_manager._request_id_explicit.get(), \
+            "测试前提：不在 managed request context 中"
+
+        async def _run():
+            await async_db_call(lambda: "ok")
+
+        with unittest.mock.patch("yweb.orm.db_session._logger") as mock_logger:
+            asyncio.run(_run())
+            mock_logger.warning.assert_called_once()
+            msg = mock_logger.warning.call_args[0][0]
+            assert "非 HTTP 请求上下文" in msg
 
     def test_mode_off_disables_detection(self):
         """YWEB_ASYNC_SAFETY=off 应完全禁用检测"""
