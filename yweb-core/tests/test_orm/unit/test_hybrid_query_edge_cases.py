@@ -278,3 +278,50 @@ class TestLazyDynamicIsAppenderNotHybrid:
 
         with pytest.raises(TypeError):
             asyncio.run(_oops())
+
+
+# ==================== Phase 7B 发现项 1 修复回归 ====================
+
+
+class TestPrimaryKeyInAsyncContext:
+    """主键生成器在 async 上下文下的回归（Phase 7B 发现项 1 修复）。
+
+    背景：``primary_key_generators.py::generate_with_retry`` 是 SA ``before_insert``
+    钩子的下游（钩子本身同步）。但用户在 ``async def`` 里直接 ``Model(...).save()`` 时，
+    ``model_class.query.filter_by(id=new_id).first()`` 原会返回 ``_HybridTerminal``
+    代替 None，被误判为「主键冲突」→ 死循环重试 → ``RuntimeError: 生成主键失败``。
+
+    修复：钩子内部用 ``allow_sync()`` 显式声明本次查询是本地幂等的冲突检测，
+    强制走 sync 路径（不论 ``HybridQuery`` 是否启用都拿到真值或 None）。
+
+    这不代表在 async def 里直接 ``.save()`` 是被推荐的写法 —— 它仍会阻塞事件循环，
+    文档仍引导用 ``def`` 路由 / ``async_db_call`` / ``db_session_scope``。本回归只是保证
+    框架**不再向用户抛一个指向错误方向的 RuntimeError**。
+    """
+
+    @pytest.mark.asyncio
+    async def test_save_in_async_def_does_not_loop_primary_key(self, db_setup):
+        """回归：async def 里直接 save()，pk_generator 正常生成 id（不再死循环）"""
+        u = EdgeAuthor(name="pk-async", email="pk@test.com")
+        u.save(commit=True)
+
+        assert u.id is not None
+
+        # async 上下文里要 await —— 这里就是验证「save 成功 + 可以 await 查回」的完整闭环
+        got = await EdgeAuthor.query.filter(EdgeAuthor.id == u.id).first()
+        assert got is not None
+        assert got.name == "pk-async"
+
+    @pytest.mark.asyncio
+    async def test_consecutive_saves_in_async_def_yield_unique_ids(self, db_setup):
+        """边界：async def 连续 save 多个对象，pk 互不冲突（allow_sync 不破坏重试逻辑）"""
+        a = EdgeAuthor(name="A", email="a@test.com")
+        a.save(commit=True)
+        b = EdgeAuthor(name="B", email="b@test.com")
+        b.save(commit=True)
+        c = EdgeAuthor(name="C", email="c@test.com")
+        c.save(commit=True)
+
+        assert a.id != b.id
+        assert b.id != c.id
+        assert a.id != c.id

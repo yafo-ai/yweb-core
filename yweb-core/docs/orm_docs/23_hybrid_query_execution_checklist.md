@@ -444,9 +444,10 @@ commit `0a5e5a8` 已把生产 async 路由批量改为 def；Phase 0 扫描也�
 
 **Phase 7B（3/5）交付**：`test_hybrid_query_edge_cases.py` 7 条测试全绿；全量跨模块回归 **1072 passed**（`tests/test_orm/ + tests/test_scheduler/`），无污染。
 
-### Phase 7B 发现项 1（生产 trap，同 Phase 5B 性质） —— 主键生成器在 async 上下文死循环
+### Phase 7B 发现项 1（生产 trap，同 Phase 5B 性质） —— 主键生成器在 async 上下文死循环  ✅ 2026-04-22 已修
 
-- **位置**：`yweb/orm/primary_key_generators.py:290`
+- **位置**：`yweb/orm/primary_key_generators.py::PrimaryKeyGenerator.generate_with_retry`
+- **原代码**：
   ```python
   existing = model_class.query.filter_by(id=new_id).first()
   if existing is None:
@@ -455,9 +456,12 @@ commit `0a5e5a8` 已把生产 async 路由批量改为 def；Phase 0 扫描也�
 - **现象**：在 `async def` 里**不套** `db_session_scope` / `async_db_call` 直接 `Model(name=...).save()`，`before_insert` 钩子调用 `.query.first()` 在 async 上下文返回 `_HybridTerminal`（不是 `None`），被判为「主键冲突」→ 死循环重试 → `RuntimeError: 生成主键失败：5次尝试后仍然冲突`
 - **触发条件**：与 Phase 5B 的 scheduler 同性质 —— 生产代码在 async 上下文直接调同步 `.query.first()`，返回 `_HybridTerminal` 被误判
 - **为何此前未暴露**：所有已知 async + save 场景都走 `db_session_scope`（Phase 5B.2 后内部自动 `allow_sync`）或 `async_db_call`，两条路径都绕开 async 检测。直接在 `async def` 里裸 `save()` 本就不是推荐写法，文档也劝退
-- **影响范围**：中等 —— 不会静默错误，用户会看到明确的 `RuntimeError`；但错误信息指向「主键冲突」而不是真因（async 上下文误判），debug 成本高
-- **处置（不在本 commit）**：独立 commit 修 `primary_key_generators.py:290`，用 `with allow_sync():` 或 `is_in_async_context()` 走 sync 路径；新增回归测试覆盖「async def 直接 save」场景。预估：3 行改动 + 1 条回归测试
-- **本轮绕开方式**：`test_dynamic_relation_terminal_await_on_list_raises_typeerror` 把 seed 留在 sync fixture，async 只在 `asyncio.run(_oops())` 里跑 `await list`；不触及 pk_generator
+- **修复**：在 `generate_with_retry` 内部用 `with allow_sync():` 包裹冲突检测查询（从 `yweb.orm.async_safety` 延迟导入）。声明这是本地幂等的主键检测，强制走 sync 路径（不论 `YWEB_HYBRID_QUERY` 开关状态都拿真值 / None）。sync 路径完全不受影响（`allow_sync` 在 sync 上下文 no-op）
+- **回归测试**：`test_hybrid_query_edge_cases.py::TestPrimaryKeyInAsyncContext`
+  - `test_save_in_async_def_does_not_loop_primary_key`：async def 里直接 save，验证 id 落库、`await .first()` 能查回
+  - `test_consecutive_saves_in_async_def_yield_unique_ids`：连续 3 次 save 生成不同 id（若修复失效必 RuntimeError 死循环）
+- **跨模块回归** `test_orm/ + test_scheduler/`：**1074 passed**（vs 基线 1072 正好 +2），零回归
+- **遗留说明**：修复**不代表推荐**在 async def 里裸 save —— 它依然阻塞事件循环。文档继续引导 `def` 路由 / `async_db_call` / `db_session_scope`。修复的价值是**框架不再向用户抛一个指向错误方向的 RuntimeError**
 
 ### 其余两项（7B.1 / 7B.2）继续延后到本 phase 后续独立 commit
 
@@ -570,3 +574,4 @@ commit `0a5e5a8` 已把生产 async 路由批量改为 def；Phase 0 扫描也�
 | 2026-04-21 | 执行 Phase 6 — 文档范式升级：把 async 读路径首选从「`async_db_call(lambda: ...)`」升级为「`await Model.query.xxx()`」，`async_db_call` 降级为写路径 / 多语句事务 / 混合 async I/O 兜底。改动 8 个入口：`.cursor/rules/yweb-orm.mdc`、`.cursor/skills/yweb-orm/SKILL.md`、`docs/03_orm_guide.md`（新增 §10.1.1 HybridQuery 首选小节）、`docs/orm_docs/12_db_session.md`（推荐方式 / 场景选择表 / Q8 重写）、`docs/orm_docs/15_fastapi_integration.md`（路由对比表 + 读/写场景示例）、`docs/orm_docs/04_query_and_filter.md`（页尾 async 写法）、`docs/orm_docs/05_pagination.md`（paginate 的 await 用法）、`docs/orm_docs/README.md`（banner + 功能矩阵 + 模块树注释）。所有改动用统一 4 句话模板（HybridQuery 读 / async_db_call 写 / def 路由最简 / `YWEB_HYBRID_QUERY=off` 回滚）。6.9 README_DEV.md 与 6.10 ASYNC_SYNC_ORM_GUIDE.md 评估后不做。全量回归 **2698 passed / 0 failed / 0 errors**，与 Phase 5B.3 基线完全一致（纯 md，零回归） |
 | 2026-04-21 | 执行 Phase 7（文档部分）— 发布与回滚预案闭环：⑴ 把 `assets/upstream_rundb_migration.md` 从「仅 `run_db` 改名迁移」扩展为完整的「yweb-core 2026-04 升级指南」（文件名保留以不破坏旧 commit 引用），顶部加「本次升级一览」表（可作为 CHANGELOG 雏形）；⑵ 新增「可选升级：async 读路径改用 HybridQuery 范式」大章（扫描命令 / 决策树 / 4 组改法示例 / 不改的情形 / 回归验证）；⑶ 新增「紧急回滚预案」三级（环境变量 → 双开关 → git revert 倒序）+「什么时候该回滚」5 类现象决策表；⑷ 新增「兼容矩阵」7 类老写法行为对照表；⑸ 23 号清单 Phase 7.3 / 7.4 勾选，7.1（版本号 bump）与 7.2（CHANGELOG 首建）标「延后到实际发版节点」并写理由；⑹ 新建 Phase 7B 把 Phase 5 延期的补测（CancelledError / 连接池压测 / lazy trap / `lazy='dynamic'` / `DetachedInstanceError`）独立跟踪，发版前非必须完成。全量回归 **2698 passed / 0 failed / 0 errors**（纯 md，零回归） |
 | 2026-04-22 | 执行 Phase 7B.3/7B.4/7B.5 — 边缘 trap 固化测试：新增 `tests/test_orm/unit/test_hybrid_query_edge_cases.py` 7 条测试（3 lazy lifecycle + 1 async joinedload e2e + 3 `lazy='dynamic'` 固化），合并做是因为三者共享 Author/Post + Team/Member 关系模型。**意外收获**：7B.4 的 async 测试暴露生产 trap「Phase 7B 发现项 1」——`primary_key_generators.py:290` 在 async 上下文直接 `.query.first()` 会返回 `_HybridTerminal` 被误判为冲突，死循环重试（性质同 Phase 5B scheduler bug）。本轮测试绕开（seed 留 sync）、生产 bug 留独立 commit 修。组合回归 `test_orm/ + test_scheduler/` **1072 passed**（vs 基线 1065 正好 +7）。7B.1（CancelledError 覆盖）/ 7B.2（连接池压测）延后至后续独立 commit |
+| 2026-04-22 | 修复 Phase 7B 发现项 1 — 主键生成器在 async 上下文的死循环：`yweb/orm/primary_key_generators.py::PrimaryKeyGenerator.generate_with_retry` 的冲突检测查询外层加 `with allow_sync():`（从 `.async_safety` 延迟导入），解决「async def 里裸 `save()` → `.query.first()` 返回 `_HybridTerminal` 被判冲突 → `RuntimeError: 生成主键失败`」的误导性错误路径。新增 `TestPrimaryKeyInAsyncContext` 类 2 条回归测试追加到 `test_hybrid_query_edge_cases.py`（单次 save 落库闭环 + 3 连 save id 唯一）。组合回归 `test_orm/ + test_scheduler/` **1074 passed**（vs 上一轮 1072 正好 +2），零回归。**修复不代表推荐**此种写法 —— 它仍阻塞事件循环；修复的价值是框架不再抛一个指向错误方向的 RuntimeError |

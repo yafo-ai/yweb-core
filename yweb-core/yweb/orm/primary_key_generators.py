@@ -280,6 +280,13 @@ class PrimaryKeyGenerator:
             max_retries = self.max_retries
 
         from yweb.log import get_logger
+        # 本函数是 SQLAlchemy `before_insert` 事件钩子的下游，钩子本身为同步执行，
+        # 但可能被从 async def 调用链触发（用户直接在 async 路由里 .save()）。
+        # 此时 `model_class.query` 是 HybridQuery：在 async 上下文会返回 `_HybridTerminal`
+        # 代替真值 / None，导致下面的 `is None` 判断永远为 False → 死循环重试 → RuntimeError。
+        # 用 `allow_sync()` 显式声明这次查询是本地幂等的主键冲突检测，
+        # 强制走同步路径取回 existing 实体或 None。
+        from .async_safety import allow_sync
         logger = get_logger("orm.primary_key")
 
         for attempt in range(max_retries):
@@ -287,7 +294,8 @@ class PrimaryKeyGenerator:
 
             # 检查ID是否已存在
             try:
-                existing = model_class.query.filter_by(id=new_id).first()
+                with allow_sync():
+                    existing = model_class.query.filter_by(id=new_id).first()
                 if existing is None:
                     return new_id
 
