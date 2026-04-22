@@ -68,7 +68,6 @@ from .db_session import (
     with_db_session,
     # 异步支持
     async_db_call,
-    run_db,  # [DEPRECATED] alias of async_db_call
 )
 
 # 异步安全检测
@@ -269,7 +268,6 @@ __all__ = [
     
     # Async Support
     "async_db_call",
-    "run_db",  # [DEPRECATED] alias of async_db_call
     "SynchronousOnlyOperation",
     "check_async_safety",
     "allow_sync",

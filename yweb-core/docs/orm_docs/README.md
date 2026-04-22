@@ -57,7 +57,7 @@
 | 文档 | 说明 |
 |------|------|
 | [22_HybridQuery 同步异步统一查询（重构设计）](22_hybrid_query_sync_async_refactor.md) | HybridQuery 方案、流程图、重构前后对比 PNG、`query.session` 兼容与实施清单（历史设计档） |
-| [23_HybridQuery 重构 · 可执行清单](23_hybrid_query_execution_checklist.md) | Phase 0–8 可勾选执行项；设计决策 D1/D2/D3/D5 记录；`run_db → async_db_call` 改名落地记录 |
+| [23_HybridQuery 重构 · 可执行清单](23_hybrid_query_execution_checklist.md) | Phase 0–8 可勾选执行项；设计决策 D1/D2/D3/D5 记录 |
 
 ## 功能清单
 

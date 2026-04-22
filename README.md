@@ -168,11 +168,6 @@ async def list_users():
     return {"users": users, "extra": extra}
 ```
 
-> `run_db` 是 `async_db_call` 的旧名，仍可用但会发出 `DeprecationWarning`，将在下一版本移除。
->
-> 未来版本会引入 **HybridQuery**，让 `await User.query.filter(...).all()` 在 `async def` 中
-> 直接可用。设计与落地计划见 [`docs/orm_docs/22_hybrid_query_sync_async_refactor.md`](yweb-core/docs/orm_docs/22_hybrid_query_sync_async_refactor.md)
-> 与 [`docs/orm_docs/23_hybrid_query_execution_checklist.md`](yweb-core/docs/orm_docs/23_hybrid_query_execution_checklist.md)。
 > 详细用法见 [yweb-core/README_DEV.md#异步路由注意事项](yweb-core/README_DEV.md#异步路由注意事项)。
 
 ### 统一响应 —— Resp 快捷类

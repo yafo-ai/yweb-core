@@ -12,7 +12,6 @@
 - with_db_session(): 装饰器方式管理 session
 - on_request_end(): 请求结束清理
 - async_db_call(): 在 async def 路由中安全执行同步 DB 操作（线程池桥接）
-- run_db(): [DEPRECATED] async_db_call 的旧别名，将在未来版本移除
 
 异步路由使用指南:
 
@@ -70,7 +69,6 @@ __all__ = [
     'on_request_end',
     # 异步支持
     'async_db_call',
-    'run_db',  # [DEPRECATED] kept as alias, emits DeprecationWarning
 ]
 
 
@@ -787,25 +785,3 @@ async def async_db_call(func: Callable[..., T], *args, **kwargs) -> T:
     """
     from starlette.concurrency import run_in_threadpool
     return await run_in_threadpool(func, *args, **kwargs)
-
-
-async def run_db(func: Callable[..., T], *args, **kwargs) -> T:
-    """[DEPRECATED] async_db_call 的旧名称，保留一个发布周期以兼容存量代码。
-
-    新代码请使用 ``async_db_call``，语义完全一致：
-
-        # 旧
-        await run_db(User.get_all)
-        # 新
-        await async_db_call(User.get_all)
-
-    调用时会发出 ``DeprecationWarning``，未来版本将删除此别名。
-    """
-    import warnings
-    warnings.warn(
-        "yweb.orm.run_db 已弃用，请使用 async_db_call 代替；"
-        "run_db 将在未来版本中移除。",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return await async_db_call(func, *args, **kwargs)
