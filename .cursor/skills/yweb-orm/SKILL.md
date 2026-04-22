@@ -99,6 +99,7 @@ ORM 基于同步 SQLAlchemy Session。`Model.query` 已升级为 **HybridQuery**
 | async 写路径 / 多语句事务 | `async def` + `await async_db_call(func, ...)` | ✅ 手动线程池，同一 request 内共享 session |
 | 启动 / lifespan / 脚本入口 | `with allow_sync():` 或 `with db_session_scope():` | ✅ 临时豁免（`db_session_scope` 在 async 下内部自动 allow_sync） |
 | `async def` 直接调同步 `.query.all()` | `await` 漏了 | ❌ 得到 `_HybridTerminal` 对象，后续属性访问报 `TypeError` |
+| 隐式终端 `for x in query` / `query[i]` / `bool(query)` | 触发 SA 底层自动执行 | ❌ async 下原地抛 `SynchronousOnlyOperation`；**同步下也避免**，改显式 `.all() / 取后 [i] / .count() > 0` |
 
 ```python
 # ✅ 同步路由（最简）：无变化

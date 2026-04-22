@@ -487,16 +487,22 @@ commit `0a5e5a8` 已把生产 async 路由批量改为 def；Phase 0 扫描也�
 
 这些项与 Phase 5/6/7 有交叉，但必须显式勾选过一遍，防遗漏。
 
-- [ ] **8.1** 补写测试用例（交叉 Phase 5）
-  - 覆盖 Phase 2–4 引入的所有新分支：同步/异步双面、一次性终端、`paginate`、隐式终端禁用在 async 下抛错
-  - 覆盖 doc 22 §7.2.3 强制清单、§7.3 衍生（懒加载 / `DetachedInstanceError` / 压测）
-  - 验收：新增测试独立目录可定位（例如 `tests/test_orm/unit/test_hybrid_query_*.py` 与 `tests/test_orm/integration/test_hybrid_query_lifecycle.py`）
+- [x] **8.1** 补写测试用例（交叉 Phase 5 / 7B）  ✅ 2026-04-22
+  - 验收走查：
+    - Phase 2–4 分支：`tests/test_orm/unit/test_hybrid_query_chain.py`（17 cases）+ `test_hybrid_query_terminal.py`（30 cases） —— 覆盖链式、同步/异步双面、一次性终端、`paginate`、隐式终端在 async 下抛错
+    - doc 22 §7.2.3 强制清单：`tests/test_orm/unit/test_hybrid_query_lifecycle.py` L1/L2/L4/L5/L6 + 7B.1 CancelledError
+    - doc 22 §7.3 衍生（懒加载 / `DetachedInstanceError`）：`tests/test_orm/unit/test_hybrid_query_edge_cases.py` 9 cases（Phase 7B.3/4/5 + 发现项 1）
+    - 压测：`tests/test_orm/integration/test_hybrid_query_pool.py` 2 cases（Phase 7B.2）
+  - 与 8.1 原文中 `integration/test_hybrid_query_lifecycle.py` 的实际路径差异：Phase 5 lifecycle 测试最终落在 `tests/test_orm/unit/test_hybrid_query_lifecycle.py`（直接走 FastAPI TestClient 就是 integration 级压测，不必单独建目录）；`integration/test_hybrid_query_pool.py` 才是独立的 integration 压测
 
-- [ ] **8.2** 更新异步查询使用文档（交叉 Phase 6）
-  - `.cursor/rules/yweb-orm.mdc`：把「async 里必须 `async_db_call`」改为「**读用 `await Model.query...`；写用 `async_db_call` 或 `def` 路由**」；补「禁止隐式终端 `for/[]/bool`」
-  - `.cursor/skills/yweb-orm/SKILL.md`：同步更新示例代码段
-  - `docs/03_orm_guide.md` / `docs/orm_docs/12_db_session.md` / `15_fastapi_integration.md`：新增 / 改写「async 中的 ORM」章节
-  - 验收：`rg "run_db" .cursor docs` 的命中全部解释清楚新旧关系（不是裸用）；`rg "\basync_db_call\b" .cursor docs` 应是默认示例名
+- [x] **8.2** 更新异步查询使用文档（交叉 Phase 6）  ✅ 2026-04-22
+  - Phase 6（6.1–6.8）已改完 8 个文档 + `.cursor/rules/yweb-orm.mdc` + `.cursor/skills/yweb-orm/SKILL.md`
+  - 本轮补齐 Phase 6 遗漏的「禁止隐式终端 `for/[]/bool`」条目：
+    - `.cursor/rules/yweb-orm.mdc` 第 8 条末尾追加禁用说明
+    - `.cursor/skills/yweb-orm/SKILL.md` 场景表新增一行对照
+  - 验收扫描：
+    - `rg "\brun_db\b" .cursor docs`：所有命中均在**解释新旧关系**的上下文中（D5 决策 / 迁移指南 / 本清单历史记录 / `README.md` 明确"旧名…将在下一版本移除" / `README_DEV.md` 专章「命名变更」），**零裸用**
+    - `rg "\basync_db_call\b" .cursor docs`：覆盖 .cursor / docs / README 共 28+ 处命中，作为默认示例名稳定出现
 
 - [ ] **8.3** 扫描并分类 async 使用点（延伸 Phase 0.4）
   - 目标：所有 `async def` 路由 + `async def test_` + 其他 `async def` 协程
@@ -540,20 +546,20 @@ commit `0a5e5a8` 已把生产 async 路由批量改为 def；Phase 0 扫描也�
   - 根 `README.md`：在「核心功能一览」新增「### 异步路由」小节（`def` 首选 + `async_db_call` 混合 I/O + HybridQuery 预告 + 链 README_DEV）
   - 验收：两个 README 读完即可写出正确的 async ORM 代码；`run_db` 旧名有明确迁移指引
 
-- [ ] **8.7** 扫描并迁移上游项目（如 `y-sso-system`）中的 `run_db`
-  - 目的：yweb-core 改名后，不引起依赖项目爆表
-  - 动作（对每个上游项目）：
-    - [ ] `rg "\brun_db\b" <project>`
-    - [ ] 逐处判定：改 `def` 路由（首选）/ 改 `async_db_call`（保守）/ 改 `await Model.query...`（HybridQuery 上线后）
-    - [ ] 跑上游测试确认
-  - 记录：`docs/orm_docs/assets/upstream_rundb_migration.md` ✅ 2026-04-21 指南模板已写入
-    - 通用三步流程（扫描 / 决策树 / 回归）
-    - A/B/C 三种改法示例（def / async_db_call 改名 / lambda 包裹）
-    - y-sso-system 项目章节模板待填充（待进入上游仓实施）
-    - 常见坑 4 条（DeprecationWarning 残留 / 连接池 / fixture 异步/同步冲突 / 版本 pin 策略）
-  - 已知上游：
-    - [ ] `y-sso-system`（或等价项目，待实施）
-    - [ ] 其他：`________________`
+- [~] **8.7** 扫描并迁移上游项目（如 `y-sso-system`）中的 `run_db` —— **本仓部分已完结，实施部分依赖上游仓**
+  - ✅ 本仓交付（2026-04-21 / 22）：
+    - `docs/orm_docs/assets/upstream_rundb_migration.md` 扩展为「yweb-core 2026-04 完整升级指南」（Phase 7 交付）
+      - 通用三步流程（扫描 / 决策树 / 回归）
+      - 三种改法示例（`def` / `async_db_call` 改名 / `lambda` 包裹）
+      - 可选升级「async 读路径改用 HybridQuery 范式」（扫描命令 / 决策树 / 4 组改法）
+      - 紧急回滚预案（环境变量 → 双开关 → git revert）+ 5 类现象回滚决策表
+      - 兼容矩阵（7 类老写法行为对照）
+      - 常见坑 4 条（`DeprecationWarning` 残留 / 连接池 / fixture 异步/同步冲突 / 版本 pin 策略）
+    - 上游项目在本仓能看到的所有信息都已齐全：接到升级通知时只需读一份 md 即可开工
+  - ⏳ 待上游仓实施（不在本仓范围，不阻塞本清单）：
+    - [ ] `y-sso-system`：进入仓后走三步流程，填充指南中的 y-sso-system 章节
+    - [ ] 其他上游：遇到时按模板执行
+  - 解读：`[~]` = 本仓部分完结；整条 8.7 的完整勾选需要上游仓实施反馈回填
 
 **Phase 8 验收**：全仓找不到裸 `run_db`（除 alias）；上游项目全绿；文档 / rules / skills 对齐新命名。
 
@@ -588,3 +594,4 @@ commit `0a5e5a8` 已把生产 async 路由批量改为 def；Phase 0 扫描也�
 | 2026-04-22 | 修复 Phase 7B 发现项 1 — 主键生成器在 async 上下文的死循环：`yweb/orm/primary_key_generators.py::PrimaryKeyGenerator.generate_with_retry` 的冲突检测查询外层加 `with allow_sync():`（从 `.async_safety` 延迟导入），解决「async def 里裸 `save()` → `.query.first()` 返回 `_HybridTerminal` 被判冲突 → `RuntimeError: 生成主键失败`」的误导性错误路径。新增 `TestPrimaryKeyInAsyncContext` 类 2 条回归测试追加到 `test_hybrid_query_edge_cases.py`（单次 save 落库闭环 + 3 连 save id 唯一）。组合回归 `test_orm/ + test_scheduler/` **1074 passed**（vs 上一轮 1072 正好 +2），零回归。**修复不代表推荐**此种写法 —— 它仍阻塞事件循环；修复的价值是框架不再抛一个指向错误方向的 RuntimeError |
 | 2026-04-22 | 执行 Phase 7B.1 — CancelledError 路径中间件 finally 覆盖：新增 `TestLifecycleCancelledError::test_cancelled_error_still_triggers_on_request_end` 到 `tests/test_orm/unit/test_hybrid_query_lifecycle.py`。不走 TestClient（同步客户端的 CancelledError 模拟依赖框架版本），改为直接构造 ASGI 调用：手写 scope / receive / send + fake app，app 内用 `allow_sync()` 开主协程 scope 的 session，再 `raise asyncio.CancelledError`；断言 middleware finally 跑完后 `_registry_has() is False`。L1（正常）/ L2（普通异常）/ 7B.1（CancelledError）三条路径至此全覆盖。单文件回归 11/11 绿（vs 基线 10 正好 +1），未触及生产代码 |
 | 2026-04-22 | 执行 Phase 7B.2 — 连接池并发压测：新建 `tests/test_orm/integration/test_hybrid_query_pool.py::TestHybridQueryConcurrentPool` 2 条测试（concurrency=10 正好打满 pool 容量 + 余量，burst=15 超过 3× 容量）。独立 file sqlite + QueuePool（pool_size=3, max_overflow=2, pool_timeout=10s）+ `RequestIDMiddleware` + `httpx.AsyncClient(ASGITransport)` 发真实并发 HTTP 请求，每个路由里 `await Model.query.count()`，验证所有请求 200 + 最终 `pool.checkedout()==0`。`tests/test_orm/integration/` 全量 32 passed（vs 基线 30 正好 +2），未触及生产代码。**Phase 7B 至此全部完成**：7B.3/4/5 edge cases（2281e23）+ 发现项 1（2df342e）+ 7B.1（a271969）+ 7B.2（本 commit） |
+| 2026-04-22 | 验收并勾选 Phase 8.1 / 8.2 / 8.7（本仓部分）：⑴ 8.1 走查验收条款，Phase 2/3/5/7B 已交付 5 个 HybridQuery 专属测试文件，覆盖同步/异步双面、一次性终端、paginate、隐式终端拒绝、lifecycle 强制清单、lazy trap、连接池压测；⑵ 8.2 跑 `rg "\brun_db\b"` / `rg "\basync_db_call\b"` 两条验收 rg —— run_db 全部命中都在解释新旧关系（零裸用），async_db_call 作为默认示例名稳定出现；同时补齐 Phase 6 遗漏的「禁止隐式终端」条目到 `.cursor/rules/yweb-orm.mdc` 第 8 条和 `.cursor/skills/yweb-orm/SKILL.md` 场景表；⑶ 8.7 标记为 `[~]` —— 本仓的指南与回滚预案完整交付，实施部分依赖进入上游仓后填充 |

@@ -26,7 +26,8 @@ globs: yweb-core/yweb/orm/**/*.py, **/domain/**/entities.py, **/domain/**/model/
    first = await User.query.filter_by(email=email).first()
    page  = await User.query.order_by(User.id.desc()).paginate(page=1, size=20)
    ```
-   支持的终端：`all / first / one / one_or_none / count / get / scalar / delete / update / paginate`
+   支持的终端：`all / first / one / one_or_none / count / get / scalar / delete / update / paginate`。
+   **禁止隐式终端**：`for x in query` / `query[i]` / `bool(query)` —— async 下会原地抛 `SynchronousOnlyOperation`，同步下也要求显式调 `.all() / [i] 取后 / .count() > 0` 等；HybridQuery 不为隐式路径返回 awaitable
 9. **async 写路径 / 多语句事务兜底**：涉及 `save() / commit() / add() / update() / delete()` 等写操作、或需要一次 session 内跑多语句时，用 `def` 路由（FastAPI 自动线程池）或 `await async_db_call(...)` 手动包装；启动/lifespan 中用 `with allow_sync():` 或 `db_session_scope()`（async 下可直接用，内部已自动 `allow_sync`）
 10. **回滚开关**：环境变量 `YWEB_HYBRID_QUERY=off` 可切回旧行为（async 下 `.query.xxx()` 不返回 awaitable，而是原地抛 `SynchronousOnlyOperation`）
 
