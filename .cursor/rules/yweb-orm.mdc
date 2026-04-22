@@ -20,6 +20,14 @@ globs: yweb-core/yweb/orm/**/*.py, **/domain/**/entities.py, **/domain/**/model/
 5. **事务管理**：Service 层使用 `@transactional`，不在 Model 层管理事务
 6. **Active Record 方法**：`.add()` / `.update()` / `.delete()` / `.get()` / `.get_all()` / `.query`
 7. **模型层不关心 HTTP**：不返回 `Resp.*`、不抛 HTTP 相关异常
-8. **async 安全**：ORM 基于同步 Session，`async def` 中直接调用会阻塞事件循环并触发 `SynchronousOnlyOperation`。纯 DB 路由用 `def`；混合异步场景用 `await async_db_call(...)`；启动/lifespan 中用 `with allow_sync():`
+8. **async 读路径（推荐 HybridQuery）**：`Model.query` 已升级为 HybridQuery，**同步代码零改动**；`async def` 路由里**链式不变，终端加 `await`**：
+   ```python
+   users = await User.query.filter(User.is_active.is_(True)).all()
+   first = await User.query.filter_by(email=email).first()
+   page  = await User.query.order_by(User.id.desc()).paginate(page=1, size=20)
+   ```
+   支持的终端：`all / first / one / one_or_none / count / get / scalar / delete / update / paginate`
+9. **async 写路径 / 多语句事务兜底**：涉及 `save() / commit() / add() / update() / delete()` 等写操作、或需要一次 session 内跑多语句时，用 `def` 路由（FastAPI 自动线程池）或 `await async_db_call(...)` 手动包装；启动/lifespan 中用 `with allow_sync():` 或 `db_session_scope()`（async 下可直接用，内部已自动 `allow_sync`）
+10. **回滚开关**：环境变量 `YWEB_HYBRID_QUERY=off` 可切回旧行为（async 下 `.query.xxx()` 不返回 awaitable，而是原地抛 `SynchronousOnlyOperation`）
 
 不确定时先阅读 `yweb-core/docs/03_orm_guide.md`。

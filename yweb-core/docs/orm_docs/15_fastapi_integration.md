@@ -63,19 +63,18 @@ YWeb ORM 基于 SQLAlchemy 同步 Session。路由函数的声明方式直接影
 
 | 声明方式 | ORM 调用 | 是否安全 | 说明 |
 |----------|----------|---------|------|
-| `def` | 直接调用 | ✅ 安全 | FastAPI 自动放入线程池 |
-| `async def` | 直接调用 | ❌ 阻塞 | 阻塞事件循环，触发 `SynchronousOnlyOperation` |
-| `async def` | `await async_db_call(...)` | ✅ 安全 | 手动放入线程池 |
+| `def` | `User.query.all()` | ✅ 安全 | FastAPI 自动放入线程池 |
+| `async def` —— 读路径 | **`await User.query.xxx()`（HybridQuery）** | ✅ 安全（推荐） | 链式不变、终端加 `await`，自动线程池 |
+| `async def` —— 写路径 / 多语句 | `await async_db_call(func)` | ✅ 安全 | 手动放入线程池，批量共享 session |
+| `async def` —— 漏 `await` | `users = User.query.all()` 后访问 `.name` | ❌ `TypeError` | 终端返回 `_HybridTerminal`，后续使用时暴露 |
 
-### 推荐：使用 def 路由（纯数据库操作）
+### 推荐：使用 def 路由（最简）
 
 ```python
-from yweb.orm import get_db
-
-# ✅ 推荐：def 路由，FastAPI 自动在线程池中执行
+# ✅ def 路由，FastAPI 自动在线程池中执行
 @app.get("/users")
 def list_users():
-    return User.query.all()
+    return User.query.filter(User.is_active.is_(True)).all()
 
 @app.post("/users")
 def create_user(data: UserCreate):
@@ -84,31 +83,61 @@ def create_user(data: UserCreate):
     return user
 ```
 
-### 混合场景：async def + async_db_call()
+### async 读路径首选：HybridQuery
 
-当路由需要同时使用异步 I/O 和数据库操作时：
+`Model.query` 是 HybridQuery，**同步代码零改动**；`async def` 里链式不变、终端加 `await` 即可：
+
+```python
+@app.get("/users")
+async def list_users():
+    users = await User.query.filter(User.is_active.is_(True)).all()
+    return users
+
+@app.get("/users/{uid}")
+async def get_user(uid: int):
+    u = await User.query.get(uid)
+    return u
+
+@app.get("/users/by-email/{email}")
+async def by_email(email: str):
+    return await User.query.filter_by(email=email).first()
+
+@app.get("/users/page")
+async def page(page: int = 1, size: int = 20):
+    return await User.query.order_by(User.id.desc()).paginate(page=page, size=size)
+```
+
+支持的终端：`all / first / one / one_or_none / count / get / scalar / delete / update / paginate`。
+同一请求内多次 `await` 共享同一个 Session（中间件在请求结束时统一清理）。
+
+**回滚开关**：环境变量 `YWEB_HYBRID_QUERY=off` 切回老行为（async 下 `.query.xxx()` 原地抛
+`SynchronousOnlyOperation`），用于发布初期的紧急定位。
+
+### 混合 async I/O / 写路径 / 多语句：`async_db_call()`
+
+当路由需要**同时**使用异步 I/O 和数据库操作、或者要做**写操作 / 多语句事务**时，
+仍建议用 `async_db_call` 手动包装一段同步代码，让整段 DB 逻辑在同一个 session 内跑：
 
 ```python
 from yweb.orm import async_db_call
 
-@app.get("/users")
-async def list_users():
-    # 数据库操作放入线程池
+@app.post("/users")
+async def create_user(body: UserCreate):
+    def _tx():
+        u = User(**body.dict())
+        u.save(commit=True)
+        return u.to_dict()
+    return await async_db_call(_tx)
+
+@app.get("/users-with-extra")
+async def list_with_extra():
     users = await async_db_call(User.get_all)
-    # 异步 HTTP 调用保持异步
     extra = await some_async_http_call()
     return {"users": users, "extra": extra}
-
-# 支持 lambda 包裹复杂查询
-@app.get("/active-users")
-async def get_active_users():
-    users = await async_db_call(
-        lambda: User.query.filter_by(is_active=True).all()
-    )
-    return users
 ```
 
-> **注意**：如果路由不涉及其他异步 I/O，直接使用 `def` 路由更简单。
+> **注意**：纯只读单句查询优先走 HybridQuery（方式一），`async_db_call` 适合多语句 /
+> 写操作 / 混合 I/O 场景。纯 DB 操作不涉及其他 async I/O 时，`def` 路由最简单。
 
 ## 依赖注入
 
@@ -479,17 +508,26 @@ async def db_session_middleware(request: Request, call_next):
 def list_users():
     return User.query.all()
 
-# ✅ 推荐：混合 async I/O 使用 async def + async_db_call
+# ✅ 推荐：async 读路径用 HybridQuery（await 直接用）
 @app.get("/users")
 async def list_users():
-    users = await async_db_call(User.get_all)
-    extra = await some_async_call()
-    return {"users": users, "extra": extra}
+    users = await User.query.filter(User.is_active.is_(True)).all()
+    return users
 
-# ❌ 禁止：async def 中直接调用同步 ORM
+# ✅ 推荐：混合 async I/O / 写路径用 async def + async_db_call
+@app.post("/users")
+async def create_user(body: UserCreate):
+    def _tx():
+        u = User(**body.dict())
+        u.save(commit=True)
+        return u.to_dict()
+    return await async_db_call(_tx)
+
+# ❌ 漏 await：得到 _HybridTerminal，后续访问属性时才暴露 TypeError
 @app.get("/users")
 async def list_users():
-    return User.query.all()  # 触发 SynchronousOnlyOperation
+    users = User.query.all()          # 漏 await
+    return [u.name for u in users]    # → TypeError
 ```
 
 ### 2. 使用依赖注入

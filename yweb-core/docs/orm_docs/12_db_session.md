@@ -587,38 +587,65 @@ from yweb.orm import SynchronousOnlyOperation
 
 ### 推荐方式
 
-**方式 1（推荐）：使用 `def` 路由**
+**方式 1（读路径首选）：HybridQuery —— async 下直接 `await Model.query.xxx()`**
 
-FastAPI 会自动将 `def` 路由放入线程池执行，不会阻塞事件循环：
-
-```python
-# ✅ 推荐：def 路由，FastAPI 自动放线程池
-@app.get("/users")
-def list_users():
-    return User.query.all()  # 安全！在线程池中执行
-```
-
-**方式 2：使用 `async_db_call()` 包装**
-
-当路由需要混合使用异步 I/O 和同步 ORM 时：
+`Model.query` 已经升级为 **HybridQuery**：同步代码零改动；`async def` 路由里
+**链式不变、终端加 `await`**，无需再手动包 lambda：
 
 ```python
-from yweb.orm import async_db_call
+# ✅ 同步路由：原封不动
+@app.get("/users-sync")
+def list_users_sync():
+    return User.query.filter(User.is_active.is_(True)).all()
 
-# ✅ async def + async_db_call()，同步调用在线程池中执行
+# ✅ async 读路径（首选）：链式不变，终端加 await
 @app.get("/users")
 async def list_users():
+    users = await User.query.filter(User.is_active.is_(True)).all()
+    first = await User.query.filter_by(email=email).first()
+    total = await User.query.filter(User.is_active.is_(True)).count()
+    page  = await User.query.order_by(User.id.desc()).paginate(page=1, size=20)
+    return users
+```
+
+支持的终端方法：`all / first / one / one_or_none / count / get / scalar / delete / update / paginate`。
+HybridQuery 内部通过 `run_in_threadpool` 把同步 SQL 移交线程池执行，同一请求内多次 `await`
+共享同一个 Session（中间件在请求结束时统一清理）。
+
+**漏写 `await` 的表现**：async 下终端返回 `_HybridTerminal` 对象，后续访问属性
+（如 `users[0].name`）会在**调用点**抛 `TypeError`，定位比老方案更直观。
+
+**回滚开关**：环境变量 `YWEB_HYBRID_QUERY=off` 可切回旧行为（async 下 `.query.xxx()`
+原地抛 `SynchronousOnlyOperation`）。
+
+**方式 2（写路径 / 多语句事务 / 批量兜底）：`def` 路由 或 `async_db_call()`**
+
+涉及 `save() / add() / update() / delete() / commit()` 等写操作、或要在一次 session 内跑
+多语句 / 批量 / 复杂回调，建议走 `def` 路由（FastAPI 自动线程池）或 `await async_db_call(...)`
+手动包装：
+
+```python
+# ✅ def 路由（最简）
+@app.get("/users")
+def list_users():
+    return User.query.all()
+
+# ✅ async def + async_db_call()，适合写操作 / 多语句 / 混合 async I/O
+from yweb.orm import async_db_call
+
+@app.post("/users")
+async def create_user(body: UserCreate):
+    def _tx():
+        u = User(name=body.name)
+        u.save(commit=True)
+        return u.to_dict()
+    return await async_db_call(_tx)
+
+@app.get("/users-with-extra")
+async def list_users_with_extra():
     users = await async_db_call(User.get_all)
     extra = await some_async_http_call()
     return {"users": users, "extra": extra}
-
-# 支持 lambda 包裹复杂查询
-@app.get("/active-users")
-async def get_active_users():
-    users = await async_db_call(
-        lambda: User.query.filter_by(is_active=True).all()
-    )
-    return users
 ```
 
 ### async_db_call() API
@@ -642,9 +669,10 @@ result = await async_db_call(func, *args, **kwargs)
 
 | 场景 | 推荐方式 | 原因 |
 |------|----------|------|
-| 纯数据库操作 | `def` 路由 | 最简单，FastAPI 自动线程池 |
-| 混合 async I/O + DB | `async def` + `async_db_call()` | 保持异步 I/O 优势 |
-| 脚本/定时任务 | `db_session_scope()` / `@with_db_session` | 非 HTTP 场景 |
+| `def` 路由（纯 DB） | `def` 路由 + `.query.xxx()` | 最简单，FastAPI 自动线程池 |
+| `async def` 路由 — **读路径** | **`await Model.query.xxx()`**（HybridQuery） | 链式不变、终端加 await |
+| `async def` 路由 — 写路径 / 多语句 | `async def` + `await async_db_call(func)` | 写操作批量共享一个 session |
+| 脚本/定时任务（含 async） | `db_session_scope()` / `@with_db_session` | 非 HTTP 场景（`db_session_scope` 在 async 下内部自动 `allow_sync`） |
 | 测试代码 | 直接调用（非 async 上下文） | 检测自动放行 |
 
 ## 常见问题
@@ -778,28 +806,37 @@ user.save(commit=True)
 
 详细说明请参考 [03_CRUD操作](03_crud_operations.md) 中的"刷新对象"和"关系操作使用单次提交模式"章节。
 
-### Q8: async def 路由中调用 ORM 报 SynchronousOnlyOperation？
+### Q8: async def 路由中调用 ORM 报 SynchronousOnlyOperation / 返回 `_HybridTerminal`？
 
-这是异步安全检测在保护你。在 `async def` 中直接调用同步 ORM 会阻塞事件循环，导致并发性能严重下降。
+- 如果 `YWEB_HYBRID_QUERY=on`（默认）：async 下直接 `User.query.all()` **不会抛异常**，
+  而是返回一个 `_HybridTerminal` 对象（等待 `await`）。忘记 `await` 时，后续访问属性会抛 `TypeError`。
+- 如果 `YWEB_HYBRID_QUERY=off`（回滚开关）：退回老行为，async 下同步 `.query.xxx()` 立刻抛
+  `SynchronousOnlyOperation`。
 
 ```python
-# ❌ 触发检测
+# ❌ 漏 await（HybridQuery 启用时）：后续使用时才暴露 TypeError
 @app.get("/users")
 async def list_users():
-    return User.query.all()
+    users = User.query.all()          # 得到 _HybridTerminal
+    return [u.name for u in users]    # → TypeError
 
-# ✅ 方式1：改为 def（推荐）
+# ✅ 方式 1（推荐）：加 await —— HybridQuery 路径
+@app.get("/users")
+async def list_users():
+    return await User.query.all()
+
+# ✅ 方式 2：改为 def
 @app.get("/users")
 def list_users():
     return User.query.all()
 
-# ✅ 方式2：使用 async_db_call()
+# ✅ 方式 3：写操作 / 多语句，用 async_db_call()
 @app.get("/users")
 async def list_users():
     return await async_db_call(User.get_all)
 ```
 
-如需临时禁用检测（不推荐），设置环境变量 `YWEB_ASYNC_SAFETY=off`。
+如需临时禁用整个安全检测（不推荐），设置 `YWEB_ASYNC_SAFETY=off`。
 
 ## 下一步
 

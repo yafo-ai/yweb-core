@@ -481,6 +481,26 @@ page_result = User.query.paginate(page=1, page_size=10, schema=UserSchema)
 # rows 中的数据会自动转换为 UserSchema
 ```
 
+## async 路由下的分页写法
+
+`paginate` 是 HybridQuery 支持的终端之一，`async def` 里直接对整条链加 `await`：
+
+```python
+# 同步路由
+page = User.query.filter(User.is_active.is_(True)) \
+                 .order_by(User.id.desc()) \
+                 .paginate(page=1, page_size=20)
+
+# async 路由：终端加 await
+page = await User.query.filter(User.is_active.is_(True)) \
+                       .order_by(User.id.desc()) \
+                       .paginate(page=1, page_size=20)
+```
+
+HybridQuery 会把 paginate 的 count + fetch 两步作为一个整体放进线程池执行，
+避免拆成两个 `await` 带来的 session 切换开销。详见
+[15_FastAPI 集成](15_fastapi_integration.md#async-def-vs-def-路由重要)。
+
 ## 下一步
 
 - [06_批量操作](06_bulk_operations.md) - 学习批量操作

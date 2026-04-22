@@ -354,18 +354,25 @@ commit `0a5e5a8` 已把生产 async 路由批量改为 def；Phase 0 扫描也�
 
 ---
 
-## Phase 6 — 文档更新
+## Phase 6 — 文档更新  ✅ 2026-04-21
 
-- [ ] **6.1** `docs/03_orm_guide.md`：新增 HybridQuery 章节 / 更新「async 中的 ORM」段落
-- [ ] **6.2** `docs/orm_docs/12_db_session.md`：`allow_sync` / `check_async_safety` 语义变更
-- [ ] **6.3** `docs/orm_docs/15_fastapi_integration.md`：把 `async_db_call` 推荐示例升级为「读用 `await Model.query`、写用 `async_db_call`」
-- [ ] **6.4** `docs/orm_docs/README.md`：索引加入 22 / 23 / （可能的 24）
-- [ ] **6.5** 删除 / 改写 `docs/ASYNC_SYNC_ORM_GUIDE.md`
-  - 决策：保留为历史方案说明 / 或改为指向 22 / 23 的精简导览
-- [ ] **6.6** `README_DEV.md`：开发入口更新
-- [ ] **6.7** `.cursor/rules/yweb-orm.mdc` / `.cursor/skills/yweb-orm/SKILL.md`：把 `async_db_call` 独占地位改为「读用 HybridQuery，写用 async_db_call」
+> 目标：把 async 读路径的首选从 `async_db_call(lambda: ...)` 升级为「`await Model.query.xxx()`」（HybridQuery），`async_db_call` 降级为**写操作 / 多语句事务 / 混合 async I/O** 场景的兜底工具。所有改动统一用同一套措辞模板，避免后续漂移。
 
-**Phase 6 验收**：文档 lint 无错；用户 onboarding 能一次读完就知道怎么写 async 路由。
+- [x] **6.1** `docs/03_orm_guide.md`：§10.1 Session 管理规则表改写；**新增 §10.1.1「HybridQuery：async 下的查询首选」**，含示例 + 终端列表 + 漏 `await` 的报错形态 + `YWEB_HYBRID_QUERY=off` 回滚说明
+- [x] **6.2** `docs/orm_docs/12_db_session.md`：「推荐方式」小节把「方式 1 = def 路由 / 方式 2 = async_db_call」重写为「方式 1 = HybridQuery（读路径首选）/ 方式 2 = def 或 async_db_call（写路径兜底）」；场景选择指南表同步更新；Q8 FAQ 改写为「漏 await → `_HybridTerminal` → 后续 TypeError」并保留 `YWEB_HYBRID_QUERY=off` 路径
+- [x] **6.3** `docs/orm_docs/15_fastapi_integration.md`：`async def vs def 路由` 表加 HybridQuery 行；新增「async 读路径首选：HybridQuery」段；旧「混合场景：async def + async_db_call()」重命名为「混合 async I/O / 写路径 / 多语句：`async_db_call()`」；底部快速参考同步更新
+- [x] **6.4** `docs/orm_docs/README.md`：§「同步 / 异步查询统一」加 banner「HybridQuery 已上线」+ 跳转链接；模块树注释 `hybrid_query.py` 从「规划中」改为已交付；功能矩阵新增一行「异步查询 / HybridQuery + YWEB_HYBRID_QUERY 回滚」；修掉 22/23 号条目里 `async_db_call → async_db_call` 的拼写错误
+- [x] **6.5** `.cursor/rules/yweb-orm.mdc`：第 8 条单条「async 安全」拆成 **8（async 读路径 HybridQuery）+ 9（async 写路径兜底）+ 10（回滚开关）**，含完整示例代码块
+- [x] **6.6** `.cursor/skills/yweb-orm/SKILL.md`：「async 安全（必读）」表格改为 5 行（同步 / async 读 / async 写 / 启动脚本 / 漏 await），示例代码块改写成三段（def 路由 / HybridQuery / async_db_call 写路径）
+- [x] **6.7** `docs/orm_docs/04_query_and_filter.md`：页尾新增「async 路由下的查询写法」小节（链式不变、终端加 await），跳转 15
+- [x] **6.8** `docs/orm_docs/05_pagination.md`：页尾新增「async 路由下的分页写法」小节，点明 paginate 的 count+fetch 由 HybridQuery 合并为单次 threadpool
+- [ ] **6.9**（不做）`README_DEV.md`：Phase 8.6 已完成 HybridQuery + `async_db_call` 段落，无需重复；Phase 6 不再动
+- [ ] **6.10**（不做）`docs/ASYNC_SYNC_ORM_GUIDE.md`：保留为历史调研文档，不做删除 / 改写；新文档已通过 12 / 15 / 03 三处入口完整覆盖
+
+**Phase 6 验收**：
+- [x] 新老文档措辞统一（HybridQuery 读 / async_db_call 写 / def 路由最简 / `YWEB_HYBRID_QUERY=off` 回滚 4 句话）
+- [x] 全量回归 **2698 passed / 0 failed / 0 errors**（与 Phase 5B.3 基线完全一致，纯 md 零回归）
+- [x] 文档入口链条闭合：`README.md → orm_docs/README.md → 12 / 15 / 03` 任一起点都能找到 HybridQuery 范式
 
 ---
 
@@ -485,3 +492,4 @@ commit `0a5e5a8` 已把生产 async 路由批量改为 def；Phase 0 扫描也�
 | 2026-04-21 | 执行 Phase 5B.1 — Scheduler async executor 历史记录修复：⑴ `yweb/scheduler/scheduler.py` 新增 `from starlette.concurrency import run_in_threadpool` 并把 `history_manager.record_start / record_success / record_failure(timeout) / record_failure(exception)` **4 处**调用全部 `await run_in_threadpool(...)` 包装；⑵ `tests/test_scheduler/conftest.py` 改回 `HybridQueryProperty` 包装并加 setup/teardown 的 save/restore（踩坑：`getattr(CoreModel, "query")` 会触发 descriptor → 对抽象基类查询 `ArgumentError`，必须改走 `CoreModel.__dict__.get`）；⑶ `tests/test_scheduler/integration/test_history.py:392` 改回 `await ... first()`；⑷ 新增回归测试 `test_async_executor_records_failure_under_hybridquery` 验证 async executor 失败路径下 `record_start + record_failure` 同时落库 + `status=failed` + `error` 包含异常信息；⑸ 全量回归 **2696 passed / 0 failed / 0 errors**，vs Phase 5 基线 2695 passed 正好 +1（新增回归），其它零差异；顺带修掉 pre-existing `test_auth → test_scheduler` 跨模块污染（原先 12 errors 归零）。5B.2（`db_session_scope` async gap）仍待用户拍板 A/B/C |
 | 2026-04-21 | 执行 Phase 5B.2 — `db_session_scope` 在 async 上下文下的 API gap（用户选定方案 A）：⑴ `yweb/orm/db_session.py::db_session_scope` 内部用 `with allow_sync():` 包裹整个 scope 生命周期（`_set_request_id + get_session + yield + commit/rollback + on_request_end` 全覆盖）；⑵ `async_safety.py` 模块 docstring 补「`async def + with db_session_scope(): → 放行`」一行；⑶ `22_hybrid_query_sync_async_refactor.md` §7.3.7 追加 Phase 5B.2 后续说明；⑷ `test_l6d` 翻正向（`pytest.raises` → 正常进入/查询/清理）并新增 `test_l6e`（async auto_commit 真落库）+ `test_l6f`（async 异常路径 rollback + 清理）；⑸ 全量回归 **2698 passed / 0 failed / 0 errors**，vs Phase 5B.1 的 2696 正好 +2（L6e/L6f），L6d 翻正向不改数量 |
 | 2026-04-21 | 执行 Phase 5B.3 — `tests/test_scheduler/unit/` 跨模块 metadata 污染修复：根因 = `TestCreateSchedulerModels` / `TestFactoryExtra` 调 `create_scheduler_models()` / `setup_scheduler(app=...)` 无前缀时把 `scheduler_job` 等表永久注册进 `BaseModel.metadata`，叠加 `_create_model_class` 的 `extend_existing=True` 导致 Index 累加，后续 test_orm 的 `create_all(新 engine)` 报 `index ... already exists`。修复 = 两个类各加 `@pytest.fixture(autouse=True) _isolate_metadata`（metadata 快照 + teardown 移除新增表）。从 6 failed / 515 errors → `test_scheduler/ + test_orm/unit/` 组合 **1035 passed**；全量回归 **2698 passed / 0 failed / 0 errors**，与 5B.2 基线零差异。**Phase 5B 全部完成** |
+| 2026-04-21 | 执行 Phase 6 — 文档范式升级：把 async 读路径首选从「`async_db_call(lambda: ...)`」升级为「`await Model.query.xxx()`」，`async_db_call` 降级为写路径 / 多语句事务 / 混合 async I/O 兜底。改动 8 个入口：`.cursor/rules/yweb-orm.mdc`、`.cursor/skills/yweb-orm/SKILL.md`、`docs/03_orm_guide.md`（新增 §10.1.1 HybridQuery 首选小节）、`docs/orm_docs/12_db_session.md`（推荐方式 / 场景选择表 / Q8 重写）、`docs/orm_docs/15_fastapi_integration.md`（路由对比表 + 读/写场景示例）、`docs/orm_docs/04_query_and_filter.md`（页尾 async 写法）、`docs/orm_docs/05_pagination.md`（paginate 的 await 用法）、`docs/orm_docs/README.md`（banner + 功能矩阵 + 模块树注释）。所有改动用统一 4 句话模板（HybridQuery 读 / async_db_call 写 / def 路由最简 / `YWEB_HYBRID_QUERY=off` 回滚）。6.9 README_DEV.md 与 6.10 ASYNC_SYNC_ORM_GUIDE.md 评估后不做。全量回归 **2698 passed / 0 failed / 0 errors**，与 Phase 5B.3 基线完全一致（纯 md，零回归） |
