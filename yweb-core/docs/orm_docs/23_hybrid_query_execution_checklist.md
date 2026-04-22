@@ -266,16 +266,18 @@ commit `0a5e5a8` 已把生产 async 路由批量改为 def；Phase 0 扫描也�
     - [x] `test_l6d_db_session_scope_inside_async_is_currently_gap` — **KNOWN GAP**：doc 22 §7.2.3 原设计 `with db_session_scope(): await q.all()` 当前抛 `SynchronousOnlyOperation`（因为 `db_session_scope.get_session()` 内部走 `check_async_safety()`）。测试固化现状，Phase 5B 修复后此断言反向
   - [x] 终端二次 `await` → 异常（已在 Phase 3 `test_hybrid_query_terminal.py` 覆盖，此处不重复）
   - [ ] ~~压测：`concurrency = pool_size + max_overflow + 5`，`engine.pool.checkedout() == 0`~~ → defer（需要 QueuePool + 文件 sqlite，规模独立；放入 Phase 7 发布前补测）
-- [ ] **5.3** 新增测试（doc 22 §7.3 衍生）→ **defer（发布前补测）**
-  - 延后理由：懒加载 / `DetachedInstanceError` 属于**文档 + 代码审查**问题，非 HybridQuery 行为异常；Phase 0 扫描确认本仓 0 处 `lazy='dynamic'`。作为 Phase 7 发布文档的一部分补 smoke + 指引更实际
-  - [ ] 懒加载陷阱测试：`await Model.query.all()` + 访问关系 → 应有明确指引（加 `options(joinedload(...))` 的正例 + 未加的反例断言）
-  - [ ] `lazy='dynamic'` 覆盖（本仓 0 命中；上游项目各自补「必须 `async_db_call`」的反例测试）
-  - [ ] `DetachedInstanceError`：跨请求访问 ORM 实例 → 正确报错 / 或已 detach
+- [x] **5.3** 新增测试（doc 22 §7.3 衍生）  ✅ 2026-04-22（由 Phase 7B.3/4/5 + 发现项 1 超前交付）
+  - 原计划 defer 到发布前补；实际由 Phase 7B 提前做掉，3 条子项全部落地在 `tests/test_orm/unit/test_hybrid_query_edge_cases.py`（commit `2281e23` + `2df342e`）：
+    - [x] 懒加载陷阱测试 → `TestLazyLoadSessionLifecycle` 3 cases（含 `joinedload` 正例 + 未加的反例 `DetachedInstanceError` 断言）+ `TestLazyLoadInAsyncRoute` 1 case
+    - [x] `lazy='dynamic'` 覆盖 → `TestLazyDynamicIsAppenderNotHybrid` 3 cases（明确 `AppenderQuery` 不是 `HybridQuery` + 终端返回 Python 原生 + `await list` 抛 `TypeError`）
+    - [x] `DetachedInstanceError` 跨请求访问 → 上面 `TestLazyLoadSessionLifecycle` 第 2 条即覆盖（`test_access_relationship_after_session_closed_raises_detached`）
+  - 额外收益：7B.4 过程中暴露并修复了 `primary_key_generators.py` 在 async 上下文的 `RuntimeError` 死循环（Phase 7B 发现项 1，独立 commit `2df342e`）
 
 **Phase 5 验收** ✅：
 - `python -m pytest tests/ --no-header -q --ignore=tests/test_ratelimit` → **2663 passed, 2 skipped, 1 xfailed, 0 failed**（与 Phase 4 基线完全一致，零新增失败；ratelimit 的 14 条 slowapi 是 pre-existing，非本项目引入）
 - `tests/test_orm/unit/test_hybrid_query_lifecycle.py` 8/8 全绿
 - L6d 以可重复的 `pytest.raises` 形式固化「`db_session_scope` 在 async 上下文抛错」的 API gap，防止 Phase 5B 修复时无声回归
+- 5.3 原定 defer 项（懒加载 / `lazy='dynamic'` / `DetachedInstanceError`）由 Phase 7B.3/4/5 超前交付，无遗留
 
 ---
 
@@ -380,12 +382,14 @@ commit `0a5e5a8` 已把生产 async 路由批量改为 def；Phase 0 扫描也�
 
 > 本 Phase 分两部分：**文档闭环**（可在发版前独立完成）+ **实际发版动作**（版本号 / CHANGELOG / tag）。本轮完成前者；后者延到你决定具体发版节点再做。
 
-- [ ] **7.1**（延后）版本号 bump —— 等实际发版节点由你决定
+- [ ] **7.1**（发版人负责，非本分支开发者责任）版本号 bump
   - 当前 `pyproject.toml` version = `0.1.3`
-  - 建议：本次含两项用户可感知的变更（`run_db` 重命名 + HybridQuery 范式升级），按语义化版本建议至少 minor bump（`0.2.0`）；如果上游认为"async 下漏 `await` 由 `SynchronousOnlyOperation` → `TypeError` 的行为变化"属于 breaking，走 major bump
-  - 延后理由：版本号是发版动作，和文档/代码改动不同步；发版前再统一做
-- [ ] **7.2**（延后）CHANGELOG 新增条目 —— 项目暂无 `CHANGELOG.md`，首建是工程约定决策，留给发版节点统一拍板
-  - 已在 `docs/orm_docs/assets/upstream_rundb_migration.md` 顶部「本次升级一览」表与「兼容矩阵」节完整记录所有变更点与兼容性影响，发版时可直接搬到 `CHANGELOG.md`
+  - 开发者视角建议（供发版人参考）：本次含两项用户可感知的变更（`run_db` 重命名 + HybridQuery 范式升级），按语义化版本建议至少 minor bump（`0.2.0`）；如果上游认为"async 下漏 `await` 由 `SynchronousOnlyOperation` → `TypeError` 的行为变化"属于 breaking，走 major bump
+  - 为何不在本分支做：版本号选择属于发版策略决策，在 feature 分支改版本号会污染 commit 历史；通常由发版人在 release 分支 / 发版 PR 上统一拍板
+- [ ] **7.2**（发版人负责，搬运工作）CHANGELOG 首建
+  - 项目当前**没有 `CHANGELOG.md`**，首次建立是工程约定决策
+  - **素材已备齐**：`docs/orm_docs/assets/upstream_rundb_migration.md` 顶部「本次升级一览」表 + 「兼容矩阵」节 + 「紧急回滚预案」节，完整记录所有变更点与兼容性影响 —— 发版人直接按章节搬到 `CHANGELOG.md` 即可，不需要开发者重写
+  - 开发者侧本分支**不新建 `CHANGELOG.md`**（避免首建决策与后续风格冲突）
 - [x] **7.3** 回滚脚本 / 开关  ✅ 2026-04-21
   - 开关已在 Phase 4 实现（`HybridQueryProperty` 读 `YWEB_HYBRID_QUERY` 环境变量）
   - 文档集中到 `docs/orm_docs/assets/upstream_rundb_migration.md`「紧急回滚预案」节，分 3 级：
@@ -504,15 +508,19 @@ commit `0a5e5a8` 已把生产 async 路由批量改为 def；Phase 0 扫描也�
     - `rg "\brun_db\b" .cursor docs`：所有命中均在**解释新旧关系**的上下文中（D5 决策 / 迁移指南 / 本清单历史记录 / `README.md` 明确"旧名…将在下一版本移除" / `README_DEV.md` 专章「命名变更」），**零裸用**
     - `rg "\basync_db_call\b" .cursor docs`：覆盖 .cursor / docs / README 共 28+ 处命中，作为默认示例名稳定出现
 
-- [ ] **8.3** 扫描并分类 async 使用点（延伸 Phase 0.4）
-  - 目标：所有 `async def` 路由 + `async def test_` + 其他 `async def` 协程
-  - 每处判定归类：
+- [~] **8.3** 扫描并分类 async 使用点（延伸 Phase 0.4）—— **决定跳过**，nice-to-have
+  - 原目标：所有 `async def` 路由 + `async def test_` + 其他 `async def` 协程按 A/B/C/D 分类
     - `[A]` 已 `await Model.query...`：无需改
     - `[B]` 同步 `Model.query...`：需加 `await` 或改 `def`
     - `[C]` 用 `async_db_call(...)`（或旧名 `run_db(...)`）：评估是否可改为 `await Model.query...`
     - `[D]` 直接 `db_manager.get_session()`：写路径，必须 `async_db_call` 包装
-  - 产出：`docs/orm_docs/assets/hq_scan_async_call_sites.md`（分类表）
-  - 依赖：D5（`run_db` → `async_db_call`）已锁定并实施（见 8.5）
+  - 原计划产出：`docs/orm_docs/assets/hq_scan_async_call_sites.md`
+  - **跳过理由**（2026-04-22 决定）：
+    - Phase 0.4 已扫过高风险嫌疑点（`async def` + 裸 `Model.query`） → **0 命中**
+    - Phase 5B（scheduler）+ Phase 7B 发现项 1（pk_generator）已通过**动态执行**暴露并修复 2 个生产 trap，说明静态分类表未必能发现问题而运行时证据更可靠
+    - 产出价值是"详尽清单"而非"暴露新 bug"，不阻塞发版也不阻塞上游迁移
+    - 上游项目自行走 `upstream_rundb_migration.md` 里的扫描命令即可对各自仓库分类
+  - 如将来发版人 / 上游 reviewer 明确要求本仓产出该分类表，可随时补做
 
 - [x] **8.4** 清理 HybridQuery 相关 TODO  ✅ 2026-04-21
   - 动作：`rg -i "TODO.*(HybridQuery|run_db|async.*query|AsyncSafeQueryProperty|async_db_call)" yweb tests`
@@ -565,6 +573,21 @@ commit `0a5e5a8` 已把生产 async 路由批量改为 def；Phase 0 扫描也�
 
 ---
 
+## 开发者侧闭合状态（2026-04-22）
+
+本分支 `feature/async-safety-guard` 开发者能主动闭合的所有条目均已处理。剩余未勾选项按**外部依赖类型**分类：
+
+| 项 | 状态 | 触发条件 |
+|---|---|---|
+| **7.1** 版本号 bump | `[ ]` | 发版人在 release 分支 / 发版 PR 决定 |
+| **7.2** CHANGELOG 首建 | `[ ]` | 发版人搬运 `upstream_rundb_migration.md` 内容 |
+| **8.3** async 使用点分类表 | `[ ]` nice-to-have | 跳过：Phase 0.4 已扫过高风险嫌疑点 0 命中 + Phase 5B / 7B 动态发现已证明无隐藏 trap；全量分类表属于详尽清单非必须品 |
+| **8.7** 上游 `run_db` 迁移 | `[~]` 本仓完结 | 进入上游仓（y-sso-system 等）后按 `upstream_rundb_migration.md` 实施 |
+
+**结论**：本分支可以进入 code review / merge 流程；发版动作（7.1 / 7.2）与上游迁移（8.7 实施）由对应 owner 另行触发，**不阻塞本分支合并**。
+
+---
+
 ## 修订记录
 
 | 日期 | 说明 |
@@ -595,3 +618,4 @@ commit `0a5e5a8` 已把生产 async 路由批量改为 def；Phase 0 扫描也�
 | 2026-04-22 | 执行 Phase 7B.1 — CancelledError 路径中间件 finally 覆盖：新增 `TestLifecycleCancelledError::test_cancelled_error_still_triggers_on_request_end` 到 `tests/test_orm/unit/test_hybrid_query_lifecycle.py`。不走 TestClient（同步客户端的 CancelledError 模拟依赖框架版本），改为直接构造 ASGI 调用：手写 scope / receive / send + fake app，app 内用 `allow_sync()` 开主协程 scope 的 session，再 `raise asyncio.CancelledError`；断言 middleware finally 跑完后 `_registry_has() is False`。L1（正常）/ L2（普通异常）/ 7B.1（CancelledError）三条路径至此全覆盖。单文件回归 11/11 绿（vs 基线 10 正好 +1），未触及生产代码 |
 | 2026-04-22 | 执行 Phase 7B.2 — 连接池并发压测：新建 `tests/test_orm/integration/test_hybrid_query_pool.py::TestHybridQueryConcurrentPool` 2 条测试（concurrency=10 正好打满 pool 容量 + 余量，burst=15 超过 3× 容量）。独立 file sqlite + QueuePool（pool_size=3, max_overflow=2, pool_timeout=10s）+ `RequestIDMiddleware` + `httpx.AsyncClient(ASGITransport)` 发真实并发 HTTP 请求，每个路由里 `await Model.query.count()`，验证所有请求 200 + 最终 `pool.checkedout()==0`。`tests/test_orm/integration/` 全量 32 passed（vs 基线 30 正好 +2），未触及生产代码。**Phase 7B 至此全部完成**：7B.3/4/5 edge cases（2281e23）+ 发现项 1（2df342e）+ 7B.1（a271969）+ 7B.2（本 commit） |
 | 2026-04-22 | 验收并勾选 Phase 8.1 / 8.2 / 8.7（本仓部分）：⑴ 8.1 走查验收条款，Phase 2/3/5/7B 已交付 5 个 HybridQuery 专属测试文件，覆盖同步/异步双面、一次性终端、paginate、隐式终端拒绝、lifecycle 强制清单、lazy trap、连接池压测；⑵ 8.2 跑 `rg "\brun_db\b"` / `rg "\basync_db_call\b"` 两条验收 rg —— run_db 全部命中都在解释新旧关系（零裸用），async_db_call 作为默认示例名稳定出现；同时补齐 Phase 6 遗漏的「禁止隐式终端」条目到 `.cursor/rules/yweb-orm.mdc` 第 8 条和 `.cursor/skills/yweb-orm/SKILL.md` 场景表；⑶ 8.7 标记为 `[~]` —— 本仓的指南与回滚预案完整交付，实施部分依赖进入上游仓后填充 |
+| 2026-04-22 | 开发者侧全分支闭合：⑴ 勾选 5.3（Phase 7B.3/4/5 已超前交付 9 条边缘场景测试）；⑵ 7.1 / 7.2 标注 owner = 发版人，本分支不做版本号 bump 与 CHANGELOG 首建（避免首建决策与后续风格冲突；素材已备齐在 `upstream_rundb_migration.md`）；⑶ 8.3 标 `[~]` 跳过（Phase 0.4 静态扫 0 命中 + Phase 5B / 7B 动态发现已证无隐藏 trap，全量分类表属 nice-to-have 非必须品）；⑷ 清单尾部新增「开发者侧闭合状态」总结表，列明剩余 4 项的外部触发条件（7.1 / 7.2 = 发版人；8.3 = 跳过；8.7 = 上游仓）。**本分支 `feature/async-safety-guard` 不阻塞合并** |
