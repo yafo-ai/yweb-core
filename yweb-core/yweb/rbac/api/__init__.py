@@ -8,7 +8,7 @@
 
 方式1：一次性挂载全部路由
 ------------------------
-    from yweb.permission.api import create_permission_router
+    from yweb.rbac.api import create_permission_router
     
     router = create_permission_router(
         permission_model=Permission,
@@ -24,7 +24,7 @@
 
 方式2：按需挂载独立路由
 ----------------------
-    from yweb.permission.api import (
+    from yweb.rbac.api import (
         create_permission_crud_router,
         create_role_crud_router,
         create_subject_router,
@@ -43,7 +43,7 @@
 方式3：完全自定义
 ----------------
     # 只使用 Service 类，自己写 API
-    from yweb.permission import PermissionService, RoleService
+    from yweb.rbac import PermissionService, RoleService
     
     perm_service = PermissionService(...)
     

@@ -4,7 +4,7 @@
 提供角色管理的业务逻辑。
 
 使用示例:
-    from yweb.permission import RoleService
+    from yweb.rbac import RoleService
     
     role_service = RoleService(
         role_model=Role,
@@ -41,7 +41,7 @@ if TYPE_CHECKING:
         AbstractSubjectRole,
     )
 
-logger = get_logger("yweb.permission.role_service")
+logger = get_logger("yweb.rbac.role_service")
 
 
 class RoleService:

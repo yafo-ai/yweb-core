@@ -5,12 +5,12 @@
 
 使用示例:
     from fastapi import FastAPI, Depends
-    from yweb.permission import require_permission, require_role
+    from yweb.rbac import require_permission, require_role
     
     app = FastAPI()
     
     # 初始化权限依赖
-    from yweb.permission import init_permission_dependency
+    from yweb.rbac import init_permission_dependency
     init_permission_dependency(
         permission_model=Permission,
         role_model=Role,
@@ -52,7 +52,7 @@ if TYPE_CHECKING:
         AbstractSubjectPermission,
     )
 
-logger = get_logger("yweb.permission.dependencies")
+logger = get_logger("yweb.rbac.dependencies")
 
 # 全局权限服务实例
 _permission_service: Optional[PermissionService] = None
@@ -82,7 +82,7 @@ def init_permission_dependency(
         PermissionService 实例
     
     使用示例:
-        from yweb.permission import init_permission_dependency
+        from yweb.rbac import init_permission_dependency
         
         @app.on_event("startup")
         async def startup():

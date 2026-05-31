@@ -3,13 +3,13 @@
 """
 
 import pytest
-from yweb.permission.types import (
+from yweb.rbac.types import (
     parse_subject_id,
     make_subject_id,
     make_permission_code,
     parse_permission_code,
 )
-from yweb.permission.enums import UserType
+from yweb.rbac.enums import UserType
 
 
 class TestSubjectId:

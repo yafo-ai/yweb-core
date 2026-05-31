@@ -5,7 +5,7 @@
 
 使用示例:
     from yweb.organization import AbstractEmployee
-    from yweb.permission.mixins import SubjectMixin
+    from yweb.rbac.mixins import SubjectMixin
     
     class Employee(AbstractEmployee, SubjectMixin):
         __tablename__ = "employee"
@@ -28,7 +28,7 @@ class SubjectMixin:
     
     使用示例:
         from yweb.organization import AbstractEmployee
-        from yweb.permission.mixins import SubjectMixin
+        from yweb.rbac.mixins import SubjectMixin
         
         class Employee(AbstractEmployee, SubjectMixin):
             __tablename__ = "employee"
@@ -38,7 +38,7 @@ class SubjectMixin:
         emp = Employee.get(123)
         subject_id = emp.subject_id  # "employee:123"
         
-        from yweb.permission import get_permission_service
+        from yweb.rbac import get_permission_service
         perm_service = get_permission_service()
         if perm_service.check_permission(emp.subject_id, "user:read"):
             ...
@@ -72,7 +72,7 @@ class EmployeeSubjectMixin(SubjectMixin):
     
     使用示例:
         from yweb.organization import AbstractEmployee
-        from yweb.permission.mixins import EmployeeSubjectMixin
+        from yweb.rbac.mixins import EmployeeSubjectMixin
         
         class Employee(AbstractEmployee, EmployeeSubjectMixin):
             __tablename__ = "employee"
@@ -91,7 +91,7 @@ class ExternalUserSubjectMixin(SubjectMixin):
     
     使用示例:
         from yweb.auth import AbstractUser
-        from yweb.permission.mixins import ExternalUserSubjectMixin
+        from yweb.rbac.mixins import ExternalUserSubjectMixin
         
         class User(AbstractUser, ExternalUserSubjectMixin):
             __tablename__ = "sys_user"

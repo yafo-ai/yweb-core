@@ -3,7 +3,7 @@
 """
 
 import pytest
-from yweb.permission.exceptions import (
+from yweb.rbac.exceptions import (
     PermissionException,
     PermissionDeniedException,
     RoleNotFoundException,

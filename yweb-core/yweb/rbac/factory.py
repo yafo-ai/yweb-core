@@ -8,9 +8,9 @@
 
 方式1：一站式设置（推荐）
 ------------------------
-    from yweb.permission import setup_permission
+    from yweb.rbac import setup_rbac
     
-    perm = setup_permission(
+    perm = setup_rbac(
         app=app,
         api_prefix="/api/v1",
         table_prefix="sys_",
@@ -23,9 +23,9 @@
 
 方式2：分步设置
 --------------
-    from yweb.permission import create_permission_models
+    from yweb.rbac import create_rbac_models
     
-    perm = create_permission_models(table_prefix="sys_")
+    perm = create_rbac_models(table_prefix="sys_")
     
     # 中间可插入自定义逻辑...
     
@@ -34,7 +34,7 @@
 
 方式3：传统方式（手动继承抽象类）
 ------------------------------
-    from yweb.permission.models import AbstractPermission, AbstractRole, ...
+    from yweb.rbac.models import AbstractPermission, AbstractRole, ...
     
     class Permission(AbstractPermission):
         __tablename__ = "sys_permission"
@@ -68,7 +68,7 @@ def _create_dynamic_model(
     """
     attrs = {
         "__tablename__": tablename,
-        "__module__": "yweb.permission.factory",
+        "__module__": "yweb.rbac.factory",
     }
     
     if extra_attrs:
@@ -97,7 +97,7 @@ class PermissionModels:
         APIResource: API 资源模型（可选）
     
     使用示例:
-        perm = create_permission_models(table_prefix="sys_")
+        perm = create_rbac_models(table_prefix="sys_")
         
         # 访问模型
         permission = perm.Permission(code="user:read", name="查看用户", ...)
@@ -140,7 +140,7 @@ class PermissionModels:
             PermissionService 实例（单例模式）
         
         使用示例:
-            perm = create_permission_models(table_prefix="sys_")
+            perm = create_rbac_models(table_prefix="sys_")
             service = perm.get_permission_service()
             
             # 检查权限
@@ -167,7 +167,7 @@ class PermissionModels:
             RoleService 实例（单例模式）
         
         使用示例:
-            perm = create_permission_models(table_prefix="sys_")
+            perm = create_rbac_models(table_prefix="sys_")
             service = perm.get_role_service()
             
             # 创建角色
@@ -204,7 +204,7 @@ class PermissionModels:
             dependencies: 路由依赖（如权限检查）
         
         使用示例:
-            perm = create_permission_models(table_prefix="sys_")
+            perm = create_rbac_models(table_prefix="sys_")
             perm.mount_routes(
                 app,
                 prefix="/api/v1/permission",
@@ -232,7 +232,7 @@ class PermissionModels:
         调用 init_permission_dependency，使 require_permission / require_role 等依赖可用。
         
         使用示例:
-            perm = create_permission_models(table_prefix="sys_")
+            perm = create_rbac_models(table_prefix="sys_")
             perm.init_dependency()
             
             # 现在可以使用 require_permission / require_role
@@ -252,10 +252,10 @@ class PermissionModels:
 
 
 # ============================================================================
-# create_permission_models - 动态模型工厂
+# create_rbac_models - 动态模型工厂
 # ============================================================================
 
-def create_permission_models(
+def create_rbac_models(
     table_prefix: str = "",
     # 自定义表名（可选）
     permission_tablename: str = None,
@@ -299,10 +299,10 @@ def create_permission_models(
     
     使用示例:
         # 基础用法
-        perm = create_permission_models(table_prefix="sys_")
+        perm = create_rbac_models(table_prefix="sys_")
         
         # 自定义表名
-        perm = create_permission_models(
+        perm = create_rbac_models(
             permission_tablename="my_permission",
             role_tablename="my_role",
         )
@@ -311,7 +311,7 @@ def create_permission_models(
         class PermissionMixin:
             extra_field: Mapped[str] = mapped_column(String(100), nullable=True)
         
-        perm = create_permission_models(
+        perm = create_rbac_models(
             table_prefix="sys_",
             permission_mixin=PermissionMixin,
         )
@@ -344,7 +344,7 @@ def create_permission_models(
         perm_bases,
         {
             "__tablename__": perm_table,
-            "__module__": "yweb.permission.factory",
+            "__module__": "yweb.rbac.factory",
         }
     )
     
@@ -356,7 +356,7 @@ def create_permission_models(
         {
             "__tablename__": role_table,
             "__role_tablename__": role_table,
-            "__module__": "yweb.permission.factory",
+            "__module__": "yweb.rbac.factory",
         }
     )
     
@@ -368,7 +368,7 @@ def create_permission_models(
         {
             "__tablename__": sr_table,
             "__role_tablename__": role_table,
-            "__module__": "yweb.permission.factory",
+            "__module__": "yweb.rbac.factory",
         }
     )
     
@@ -381,7 +381,7 @@ def create_permission_models(
             "__tablename__": rp_table,
             "__role_tablename__": role_table,
             "__permission_tablename__": perm_table,
-            "__module__": "yweb.permission.factory",
+            "__module__": "yweb.rbac.factory",
         }
     )
     
@@ -393,7 +393,7 @@ def create_permission_models(
         {
             "__tablename__": sp_table,
             "__permission_tablename__": perm_table,
-            "__module__": "yweb.permission.factory",
+            "__module__": "yweb.rbac.factory",
         }
     )
     
@@ -407,7 +407,7 @@ def create_permission_models(
             {
                 "__tablename__": api_table,
                 "__permission_tablename__": perm_table,
-                "__module__": "yweb.permission.factory",
+                "__module__": "yweb.rbac.factory",
             }
         )
     
@@ -422,10 +422,10 @@ def create_permission_models(
 
 
 # ============================================================================
-# setup_permission - 一站式设置函数
+# setup_rbac - 一站式设置函数
 # ============================================================================
 
-def setup_permission(
+def setup_rbac(
     app=None,
     api_prefix: str = "/api/permission",
     table_prefix: str = "",
@@ -480,10 +480,10 @@ def setup_permission(
     
     使用示例:
         # 最简用法
-        perm = setup_permission(app=app)
+        perm = setup_rbac(app=app)
         
         # 完整配置
-        perm = setup_permission(
+        perm = setup_rbac(
             app=app,
             api_prefix="/api/v1/permission",
             table_prefix="sys_",
@@ -492,12 +492,12 @@ def setup_permission(
         )
         
         # 不挂载路由（仅创建模型和初始化依赖）
-        perm = setup_permission(app=None)
+        perm = setup_rbac(app=None)
         # 稍后手动挂载
         perm.mount_routes(app, prefix="/api/v1/permission")
     """
     # 创建模型
-    perm = create_permission_models(
+    perm = create_rbac_models(
         table_prefix=table_prefix,
         permission_tablename=permission_tablename,
         role_tablename=role_tablename,
@@ -532,6 +532,6 @@ def setup_permission(
 
 __all__ = [
     "PermissionModels",
-    "create_permission_models",
-    "setup_permission",
+    "create_rbac_models",
+    "setup_rbac",
 ]

@@ -1,17 +1,17 @@
 """
 权限模块 - 辅助函数
 
-提供 setup_permission_relationships() 辅助函数，用于自动设置模型间的 relationship。
+提供 setup_rbac_relationships() 辅助函数，用于自动设置模型间的 relationship。
 解决抽象类无法预先定义 relationship 的问题。
 
 使用方式：
 
 方式1（推荐）：使用辅助函数自动设置所有关系
     
-    from yweb.permission import (
-        setup_permission_relationships,
+    from yweb.rbac import (
+        setup_rbac_relationships,
     )
-    from yweb.permission.models import (
+    from yweb.rbac.models import (
         AbstractPermission, AbstractRole,
         AbstractSubjectRole, AbstractRolePermission, AbstractSubjectPermission,
     )
@@ -23,7 +23,7 @@
     class SubjectPermission(AbstractSubjectPermission): pass
     
     # 一行代码设置所有关系
-    setup_permission_relationships(
+    setup_rbac_relationships(
         Permission, Role, SubjectRole, RolePermission, SubjectPermission
     )
     
@@ -47,7 +47,7 @@ from typing import Type, Optional
 from sqlalchemy.orm import relationship
 
 
-def setup_permission_relationships(
+def setup_rbac_relationships(
     permission_model: Type,
     role_model: Type,
     subject_role_model: Optional[Type] = None,
@@ -88,8 +88,8 @@ def setup_permission_relationships(
         - permission: Permission (多对一)
     
     Example:
-        >>> from yweb.permission import setup_permission_relationships
-        >>> setup_permission_relationships(
+        >>> from yweb.rbac import setup_rbac_relationships
+        >>> setup_rbac_relationships(
         ...     Permission, Role, SubjectRole, RolePermission, SubjectPermission
         ... )
         >>> 
@@ -214,4 +214,4 @@ def setup_permission_relationships(
             )
 
 
-__all__ = ["setup_permission_relationships"]
+__all__ = ["setup_rbac_relationships"]

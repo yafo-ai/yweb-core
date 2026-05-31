@@ -17,7 +17,7 @@ class AbstractRolePermission(CoreModel, SimpleSoftDeleteMixin):
     将角色与权限关联，一个角色可以拥有多个权限。
     
     使用示例:
-        from yweb.permission.models import AbstractRolePermission
+        from yweb.rbac.models import AbstractRolePermission
         
         class RolePermission(AbstractRolePermission):
             __tablename__ = "sys_role_permission"

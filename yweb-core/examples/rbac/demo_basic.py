@@ -12,14 +12,14 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from yweb.orm import init_database, get_engine
 from yweb.orm.core_model import CoreModel
-from yweb.permission.models import (
+from yweb.rbac.models import (
     AbstractPermission,
     AbstractRole,
     AbstractSubjectRole,
     AbstractRolePermission,
     AbstractSubjectPermission,
 )
-from yweb.permission.services import PermissionService, RoleService
+from yweb.rbac.services import PermissionService, RoleService
 
 
 # ==================== 1. 定义模型 ====================

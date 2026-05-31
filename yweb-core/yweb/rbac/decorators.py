@@ -4,7 +4,7 @@
 提供权限检查装饰器，适用于普通函数和方法。
 
 使用示例:
-    from yweb.permission import permission_required, role_required
+    from yweb.rbac import permission_required, role_required
     
     @permission_required("user:read")
     def get_user(subject_id: str, user_id: int):
@@ -23,7 +23,7 @@ from .types import PermissionCode, RoleCode, SubjectId
 from .exceptions import PermissionDeniedException
 from yweb.log import get_logger
 
-logger = get_logger("yweb.permission.decorators")
+logger = get_logger("yweb.rbac.decorators")
 
 
 def permission_required(

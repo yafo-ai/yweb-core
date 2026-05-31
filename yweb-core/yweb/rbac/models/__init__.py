@@ -4,7 +4,7 @@
 提供权限、角色等抽象模型类，应用层通过继承这些抽象类来创建具体的模型。
 
 使用示例:
-    from yweb.permission.models import (
+    from yweb.rbac.models import (
         AbstractPermission,
         AbstractRole,
         AbstractSubjectRole,
@@ -22,7 +22,7 @@
 
 注意:
     用户模型已统一到认证模块，使用 yweb.auth.AbstractUser 代替原来的 AbstractExternalUser。
-    如需权限主体能力，配合 yweb.permission.mixins.ExternalUserSubjectMixin 使用。
+    如需权限主体能力，配合 yweb.rbac.mixins.ExternalUserSubjectMixin 使用。
 """
 
 from .permission import AbstractPermission

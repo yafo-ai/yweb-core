@@ -376,7 +376,7 @@ JWT、API Key、Session、OAuth 2.0、OIDC、MFA（多因素）、LDAP/AD ——
 ### 权限管理 —— RBAC 框架
 
 ```python
-from yweb.permission import require_permission, require_role
+from yweb.rbac import require_permission, require_role
 
 @app.get("/users")
 def list_users(user=Depends(require_permission("user:list"))):
@@ -681,7 +681,7 @@ yweb-core/
 ├── yweb/                     # 核心包
 │   ├── orm/                  # ORM（Active Record、分页、软删除、Mixin）
 │   ├── auth/                 # 认证（JWT 双 Token、setup_auth 一键启用）
-│   ├── permission/           # 权限（RBAC、角色继承）
+│   ├── rbac/                 # 权限（RBAC、角色继承）
 │   ├── organization/         # 组织管理（setup_organization 一键启用）
 │   ├── cache/                # 缓存（@cached 装饰器、自动失效）
 │   ├── scheduler/            # 定时任务（Cron / Interval / Once、Builder 模式）

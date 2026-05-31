@@ -31,7 +31,7 @@ class AbstractAPIResource(CoreModel, SimpleSoftDeleteMixin):
         - sort_order: 排序
     
     使用示例:
-        from yweb.permission.models import AbstractAPIResource
+        from yweb.rbac.models import AbstractAPIResource
         
         class APIResource(AbstractAPIResource):
             __tablename__ = "sys_api_resource"

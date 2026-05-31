@@ -29,7 +29,7 @@ class AbstractSubjectRole(CoreModel, SimpleSoftDeleteMixin):
         - is_active: 是否启用
     
     使用示例:
-        from yweb.permission.models import AbstractSubjectRole
+        from yweb.rbac.models import AbstractSubjectRole
         
         class SubjectRole(AbstractSubjectRole):
             __tablename__ = "sys_subject_role"

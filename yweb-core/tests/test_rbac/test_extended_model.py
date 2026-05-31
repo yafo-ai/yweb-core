@@ -17,12 +17,12 @@ from sqlalchemy import Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, sessionmaker, scoped_session
 
 from yweb.orm import BaseModel, CoreModel
-from yweb.permission.models import (
+from yweb.rbac.models import (
     AbstractPermission,
     AbstractRole,
 )
-from yweb.permission.schemas.permission import PermissionResponse
-from yweb.permission.schemas.role import RoleResponse
+from yweb.rbac.schemas.permission import PermissionResponse
+from yweb.rbac.schemas.role import RoleResponse
 
 
 # ==================== 扩展模型定义（模拟用户场景） ====================

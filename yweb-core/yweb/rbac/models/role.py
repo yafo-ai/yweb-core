@@ -9,7 +9,7 @@
 
 层级关系:
     AbstractSimpleRole (yweb.auth)       ← id, name, code, description, 软删除
-        └── AbstractRole (yweb.permission)  ← + 树形继承 + is_active + is_system
+        └── AbstractRole (yweb.rbac)  ← + 树形继承 + is_active + is_system
 
 两者共享 RoleMixin API（User.has_role / User.role_codes），
 从轻量版升级到完整版只需更换 Role 基类，无需改动用户侧代码。
@@ -56,7 +56,7 @@ class AbstractRole(AbstractSimpleRole, TreeMixin):
     
     使用示例::
     
-        from yweb.permission.models import AbstractRole
+        from yweb.rbac.models import AbstractRole
         
         class Role(AbstractRole):
             __tablename__ = "sys_role"

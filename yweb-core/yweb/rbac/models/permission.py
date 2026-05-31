@@ -28,7 +28,7 @@ class AbstractPermission(CoreModel, SimpleSoftDeleteMixin):
         - module: 所属模块，用于分组管理
     
     使用示例:
-        from yweb.permission.models import AbstractPermission
+        from yweb.rbac.models import AbstractPermission
         
         class Permission(AbstractPermission):
             __tablename__ = "sys_permission"

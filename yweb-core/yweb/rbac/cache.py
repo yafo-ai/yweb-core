@@ -4,7 +4,7 @@
 提供基于内存的权限缓存，支持 TTL 自动过期和主动失效。
 
 使用示例:
-    from yweb.permission.cache import permission_cache
+    from yweb.rbac.cache import permission_cache
     
     # 获取用户权限（缓存优先）
     perms = permission_cache.get_permissions("employee:123")
@@ -33,7 +33,7 @@ except ImportError:
 
 from yweb.log import get_logger
 
-logger = get_logger("yweb.permission.cache")
+logger = get_logger("yweb.rbac.cache")
 
 
 @dataclass

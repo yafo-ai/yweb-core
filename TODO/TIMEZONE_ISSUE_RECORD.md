@@ -49,9 +49,9 @@ updated_at: Mapped[datetime] = mapped_column(
 ### 3. ⚠️ 潜在问题：其他模块使用 datetime.now
 
 **位置**:
-- `yweb/permission/models/subject_role.py:102`
+- `yweb/rbac/models/subject_role.py:102`
 - `yweb/orm/statemachine/state_history.py:95`
-- `yweb/permission/models/subject_permission.py:96`
+- `yweb/rbac/models/subject_permission.py:96`
 
 **问题描述**:
 ```python
@@ -95,9 +95,9 @@ granted_at: Mapped[datetime] = mapped_column(
 
 - `yweb/auth/mixins.py` - 已修复，参考实现
 - `yweb/orm/core_model.py` - 需要处理
-- `yweb/permission/models/subject_role.py` - 需要处理
+- `yweb/rbac/models/subject_role.py` - 需要处理
 - `yweb/orm/statemachine/state_history.py` - 需要处理
-- `yweb/permission/models/subject_permission.py` - 需要处理
+- `yweb/rbac/models/subject_permission.py` - 需要处理
 
 ## 记录时间
 

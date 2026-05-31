@@ -8,10 +8,10 @@ import pytest
 from unittest.mock import Mock, MagicMock, patch
 from datetime import datetime, timedelta
 
-from yweb.permission.services.permission_service import PermissionService
-from yweb.permission.services.role_service import RoleService
-from yweb.permission.cache import PermissionCache
-from yweb.permission.exceptions import (
+from yweb.rbac.services.permission_service import PermissionService
+from yweb.rbac.services.role_service import RoleService
+from yweb.rbac.cache import PermissionCache
+from yweb.rbac.exceptions import (
     PermissionDeniedException,
     RoleNotFoundException,
     PermissionNotFoundException,
@@ -253,7 +253,7 @@ class TestPermissionServiceCache:
     
     def test_cache_hit(self):
         """测试缓存命中"""
-        with patch('yweb.permission.services.permission_service.permission_cache') as mock_cache:
+        with patch('yweb.rbac.services.permission_service.permission_cache') as mock_cache:
             mock_cache.get_permissions.return_value = {"user:read", "user:write"}
             mock_cache.has_permission.return_value = True
             

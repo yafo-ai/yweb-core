@@ -12,7 +12,7 @@ yweb 权限模块
 
 1. 定义模型（继承抽象类）:
 
-    from yweb.permission.models import (
+    from yweb.rbac.models import (
         AbstractPermission,
         AbstractRole,
         AbstractSubjectRole,
@@ -44,7 +44,7 @@ yweb 权限模块
 
 2. 初始化权限服务（FastAPI 启动时）:
 
-    from yweb.permission import init_permission_dependency
+    from yweb.rbac import init_permission_dependency
     
     @app.on_event("startup")
     async def startup():
@@ -59,7 +59,7 @@ yweb 权限模块
 3. 在路由中使用权限检查:
 
     from fastapi import Depends
-    from yweb.permission import require_permission, require_role
+    from yweb.rbac import require_permission, require_role
     
     @app.get("/users")
     async def list_users(user = Depends(require_permission("user:list"))):
@@ -71,7 +71,7 @@ yweb 权限模块
 
 4. 在普通函数中使用装饰器:
 
-    from yweb.permission import permission_required, role_required
+    from yweb.rbac import permission_required, role_required
     
     @permission_required("user:read")
     def get_user(subject_id: str, user_id: int):
@@ -80,7 +80,7 @@ yweb 权限模块
 5. 集成员工系统:
 
     from yweb.organization import AbstractEmployee
-    from yweb.permission.mixins import EmployeeSubjectMixin
+    from yweb.rbac.mixins import EmployeeSubjectMixin
     
     class Employee(AbstractEmployee, EmployeeSubjectMixin):
         __tablename__ = "employee"
@@ -162,7 +162,7 @@ from .decorators import (
 )
 
 # 辅助函数
-from .helpers import setup_permission_relationships
+from .helpers import setup_rbac_relationships
 
 # Mixins
 from .mixins import (
@@ -184,8 +184,8 @@ from .api import (
 # 工厂函数
 from .factory import (
     PermissionModels,
-    create_permission_models,
-    setup_permission,
+    create_rbac_models,
+    setup_rbac,
 )
 
 
@@ -248,7 +248,7 @@ __all__ = [
     "super_admin_required",
     
     # 辅助函数
-    "setup_permission_relationships",
+    "setup_rbac_relationships",
     
     # Mixins
     "SubjectMixin",
@@ -265,6 +265,6 @@ __all__ = [
     
     # 工厂函数
     "PermissionModels",
-    "create_permission_models",
-    "setup_permission",
+    "create_rbac_models",
+    "setup_rbac",
 ]

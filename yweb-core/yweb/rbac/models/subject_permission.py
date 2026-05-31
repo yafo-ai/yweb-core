@@ -30,7 +30,7 @@ class AbstractSubjectPermission(CoreModel, SimpleSoftDeleteMixin):
         - is_active: 是否启用
     
     使用示例:
-        from yweb.permission.models import AbstractSubjectPermission
+        from yweb.rbac.models import AbstractSubjectPermission
         
         class SubjectPermission(AbstractSubjectPermission):
             __tablename__ = "sys_subject_permission"

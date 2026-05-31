@@ -458,7 +458,7 @@ class MyAuthService(BaseAuthService):
 
 提供轻量级的角色管理，适用于只需"用户属于哪些角色"的简单场景。
 
-`yweb.permission.AbstractRole` 继承自 `AbstractSimpleRole`，如需升级到完整 RBAC（树形角色继承 + 权限管理），只需更换 Role 基类，`User.has_role()` / `User.role_codes` 等 API 保持不变。
+`yweb.rbac.AbstractRole` 继承自 `AbstractSimpleRole`，如需升级到完整 RBAC（树形角色继承 + 权限管理），只需更换 Role 基类，`User.has_role()` / `User.role_codes` 等 API 保持不变。
 
 ### 推荐方式：setup_auth(role_model=True)
 

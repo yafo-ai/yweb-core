@@ -20,14 +20,14 @@ from typing import List
 
 from yweb.orm import init_database, get_engine
 from yweb.orm.core_model import CoreModel
-from yweb.permission.models import (
+from yweb.rbac.models import (
     AbstractPermission,
     AbstractRole,
     AbstractSubjectRole,
     AbstractRolePermission,
     AbstractSubjectPermission,
 )
-from yweb.permission import (
+from yweb.rbac import (
     init_permission_dependency,
     get_permission_service,
     require_permission,
@@ -129,7 +129,7 @@ def startup():
 
 def init_demo_data():
     """初始化演示数据"""
-    from yweb.permission.services import PermissionService, RoleService
+    from yweb.rbac.services import PermissionService, RoleService
     
     perm_service = PermissionService(
         permission_model=Permission,

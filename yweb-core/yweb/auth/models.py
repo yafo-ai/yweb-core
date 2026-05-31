@@ -8,7 +8,7 @@
 
 角色模型层级关系:
     AbstractSimpleRole (yweb.auth)      ← 轻量级，仅 description
-        └── AbstractRole (yweb.permission)  ← 完整 RBAC，树形继承 + is_active/is_system
+        └── AbstractRole (yweb.rbac)  ← 完整 RBAC，树形继承 + is_active/is_system
     
     两者共享 RoleMixin API（User.has_role / User.role_codes），
     从轻量版升级到完整版只需更换 Role 基类，无需改动用户侧代码。
@@ -342,9 +342,9 @@ class AbstractSimpleRole(BaseModel):
     """轻量级角色抽象模型
     
     提供简单的角色标识管理，适用于只需要"用户属于哪些角色"的场景。
-    如需完整 RBAC（树形角色继承 + 权限管理），请使用 yweb.permission.AbstractRole。
+    如需完整 RBAC（树形角色继承 + 权限管理），请使用 yweb.rbac.AbstractRole。
     
-    yweb.permission.AbstractRole 继承自本类，两者共享 RoleMixin API（
+    yweb.rbac.AbstractRole 继承自本类，两者共享 RoleMixin API（
     User.has_role() / User.role_codes），升级到完整版时无需改动用户侧代码。
     
     继承自 BaseModel，自动拥有:

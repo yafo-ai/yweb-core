@@ -3,7 +3,7 @@
 """
 
 import pytest
-from yweb.permission.cache import PermissionCache
+from yweb.rbac.cache import PermissionCache
 from tests.helpers import get_cache_version
 
 

@@ -8,7 +8,7 @@
 4. 缓存统计
 """
 
-from yweb.permission.cache import PermissionCache, configure_cache, permission_cache
+from yweb.rbac.cache import PermissionCache, configure_cache, permission_cache
 
 
 def main():

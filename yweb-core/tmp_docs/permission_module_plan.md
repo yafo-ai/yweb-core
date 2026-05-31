@@ -1015,7 +1015,7 @@ class APIPermissionMiddleware(BaseHTTPMiddleware):
 提供完整的 RESTful API 供其他项目调用：
 
 ```python
-# yweb/permission/api/routes.py
+# yweb/rbac/api/routes.py
 
 from fastapi import APIRouter, Depends, Query
 from typing import List, Optional
@@ -1197,7 +1197,7 @@ async def invalidate_all_cache():
 # 其他项目的 main.py
 
 from fastapi import FastAPI
-from yweb.permission import (
+from yweb.rbac import (
     permission_router,           # 权限管理 API
     APIPermissionMiddleware,     # API 权限检查中间件
     PermissionService,
@@ -1730,7 +1730,7 @@ auth_logger.warning(f"权限拒绝: subject={subject_id}, permission={permission
 
 ```python
 from fastapi import FastAPI, Depends
-from yweb.permission import (
+from yweb.rbac import (
     require_permission,
     require_roles,
     PermissionChecker,
@@ -1796,7 +1796,7 @@ perm_service.assign_direct_permission(
 ### 8.3 查看缓存状态
 
 ```python
-from yweb.permission import permission_cache
+from yweb.rbac import permission_cache
 
 # 获取缓存信息
 info = permission_cache.get_cache_info()

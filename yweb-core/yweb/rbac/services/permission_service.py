@@ -4,7 +4,7 @@
 提供权限检查、权限管理等核心业务逻辑。
 
 使用示例:
-    from yweb.permission import PermissionService
+    from yweb.rbac import PermissionService
     
     # 创建服务实例
     perm_service = PermissionService(
@@ -44,7 +44,7 @@ if TYPE_CHECKING:
         AbstractSubjectPermission,
     )
 
-logger = get_logger("yweb.permission.service")
+logger = get_logger("yweb.rbac.service")
 
 
 class PermissionService:

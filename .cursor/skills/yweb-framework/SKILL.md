@@ -58,7 +58,8 @@ YWeb 是基于 **FastAPI + SQLAlchemy** 的 Python Web 框架，核心特点：
 | 认证模块指南 | `yweb-core/docs/06_auth_guide.md` | JWT、Session、OAuth、API Key 等认证方式 |
 | 认证流程详解 | `yweb-core/docs/webapi_development_standards/auth_flow_guide.md` | JWT 认证流程、缓存优化、自动失效 |
 | JWT Token 规范 | `yweb-core/docs/webapi_development_standards/jwt_auth_guide.md` | 双 Token 机制、前后端规范 |
-| 权限管理 | `yweb-core/docs/08_permission_guide.md` | RBAC 框架、角色/权限管理 |
+| 权限管理（RBAC） | `yweb-core/docs/08_permission_guide.md` | RBAC 框架、角色/权限管理 |
+| ACL 对象级权限 | `yweb-core/docs/16_acl_guide.md` | ACL 引擎、资源树、DENY 优先算法 |
 | 组织管理 | `yweb-core/docs/07_organization_guide.md` | 组织架构管理模块 |
 
 ### 路由与控制器
