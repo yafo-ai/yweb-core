@@ -38,7 +38,7 @@
 - db_manager._get_request_id(): 获取请求ID
 """
 
-from typing import Optional, Callable, Any, TypeVar, Generator
+from typing import Callable, Any, TypeVar, Generator
 from uuid import uuid4
 import logging
 import asyncio

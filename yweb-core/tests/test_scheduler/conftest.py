@@ -86,7 +86,8 @@ def scheduler_db_session(scheduler_engine, scheduler_models):
         # 清理 - 忽略可能的线程错误
         try:
             session_scope.remove()
-        except Exception:
+        except (RuntimeError, AttributeError):
+            # teardown 阶段允许清理失败，避免覆盖测试主体断言结果
             pass
 
 

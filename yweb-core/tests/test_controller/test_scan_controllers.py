@@ -6,7 +6,6 @@
 - prefix 正确拼接
 """
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 

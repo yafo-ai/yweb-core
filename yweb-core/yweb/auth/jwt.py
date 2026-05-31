@@ -29,7 +29,7 @@
 
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, Union
-from dataclasses import asdict
+
 
 from .schemas import TokenPayload, TokenData
 

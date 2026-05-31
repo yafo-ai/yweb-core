@@ -30,9 +30,8 @@ import asyncio
 import unittest.mock
 
 import pytest
-from sqlalchemy import Column, String, create_engine
+from sqlalchemy import Column, String
 from sqlalchemy.orm import sessionmaker, scoped_session
-from sqlalchemy.pool import StaticPool
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient

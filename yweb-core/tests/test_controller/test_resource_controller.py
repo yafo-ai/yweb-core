@@ -11,7 +11,6 @@
 - prefix 为空字符串的场景
 """
 
-import pytest
 from fastapi import FastAPI, Depends, Query
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
@@ -359,7 +358,6 @@ class TestEmptyPrefix:
             async def action(self):
                 return {"done": True}
 
-        module_router = FastAPI().router
         self.app = FastAPI()
         self.app.include_router(RootController.router, prefix="/api/v1/connector")
         self.client = TestClient(self.app)
