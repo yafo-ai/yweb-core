@@ -442,7 +442,63 @@ async def delete_department(dept_id: int = Query(...)):
 
 ---
 
+## 6. 类视图模式（ResourceController）
+
+除了函数式路由，yweb 还提供 `ResourceController` 类视图来组织 API。两者遵循相同的「瘦 API」原则，选择取决于偏好和场景。
+
+### 6.1 基本写法
+
+```python
+from yweb import Resp
+from yweb.controller import ResourceController, get
+
+class DepartmentController(ResourceController):
+    prefix = "/department"
+    tags = ["部门管理"]
+
+    @get
+    async def list(self, page: int = 1, size: int = 10):
+        """获取部门列表"""
+        result = DepartmentModel.paginate(page=page, per_page=size)
+        return Resp.OK(DepartmentResponse.from_page(result))
+
+    async def create(self, data: DepartmentCreate):
+        """创建部门"""
+        try:
+            dept = org_service.create_dept(data)
+            return Resp.OK(DepartmentResponse.from_entity(dept))
+        except ValueError as e:
+            return Resp.BadRequest(message=str(e))
+```
+
+### 6.2 职责不变
+
+类视图只是路由的**组织方式**不同，「瘦 API」原则完全一致：
+
+| 职责 | 类视图中的体现 |
+|------|-------------|
+| 参数验证 | 方法参数的 type hints / Pydantic Schema |
+| DTO 转换 | `XxxResponse.from_entity()` / `from_page()` |
+| 异常处理 | `try/except ValueError` → `Resp.BadRequest()` |
+| 调用服务层 | `service.create(...)` / `service.update(...)` |
+
+**禁止**在 controller 方法中写业务逻辑（唯一性校验、状态切换、关联处理等），这些仍然属于 Service/Domain 层。
+
+### 6.3 何时用哪种
+
+| 场景 | 推荐 |
+|------|------|
+| 标准 CRUD 资源（用户、部门、订单...） | ResourceController |
+| 特殊协议端点（webhook、OAuth callback） | 函数式路由 |
+| 需要精细 response_model 控制 | 函数式路由 |
+| 新项目、统一风格 | ResourceController |
+
+两种方式可以在同一项目中共存。详见 [ResourceController 类视图指南](../15_controller_guide.md)。
+
+---
+
 ## 相关文档
 
+- [ResourceController 类视图指南](../15_controller_guide.md) - 类视图完整用法
 - [DTO 与响应处理规范](dto_response_guide.md) - DTO 的详细配置和高级用法
 - [Model 与 Service 层设计规范](model_and_service_design_guide.md) - 服务层设计规范

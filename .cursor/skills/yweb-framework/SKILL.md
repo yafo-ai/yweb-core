@@ -21,13 +21,14 @@ YWeb 是基于 **FastAPI + SQLAlchemy** 的 Python Web 框架，核心特点：
 ## 核心原则速查
 
 1. **瘦 API 原则**：API 层只做参数验证、DTO 转换、异常捕获、调用服务层
-2. **业务逻辑归属**：单聚合内的业务规则 → 领域模型方法；跨聚合操作 → Service 层
-3. **异常处理**：使用 `ValueError` 表达业务规则违反，不定义自定义异常类
-4. **Model 字段**：所有字段必须有 `comment` 参数
-5. **响应格式**：使用 `Resp.OK()` / `Resp.NotFound()` 等统一响应；响应模型使用 `DTO` 类
-6. **请求模型**：使用 Pydantic `BaseModel`（不是 DTO）
-7. **缓存**：使用 `@cached` 装饰器，注意 TTL 设置和失效策略
-8. **事务管理**：Service 层负责事务边界，使用 `@transactional` 装饰器
+2. **路由组织**：优先使用 `ResourceController` 类视图（方法名即路由、默认 POST、@get 标记 GET）；特殊端点可用函数式路由
+3. **业务逻辑归属**：单聚合内的业务规则 → 领域模型方法；跨聚合操作 → Service 层
+4. **异常处理**：使用 `ValueError` 表达业务规则违反，不定义自定义异常类
+5. **Model 字段**：所有字段必须有 `comment` 参数
+6. **响应格式**：使用 `Resp.OK()` / `Resp.NotFound()` 等统一响应；响应模型使用 `DTO` 类
+7. **请求模型**：使用 Pydantic `BaseModel`（不是 DTO）
+8. **缓存**：使用 `@cached` 装饰器，注意 TTL 设置和失效策略
+9. **事务管理**：Service 层负责事务边界，使用 `@transactional` 装饰器
 
 ## 规范文档索引
 
@@ -59,6 +60,12 @@ YWeb 是基于 **FastAPI + SQLAlchemy** 的 Python Web 框架，核心特点：
 | JWT Token 规范 | `yweb-core/docs/webapi_development_standards/jwt_auth_guide.md` | 双 Token 机制、前后端规范 |
 | 权限管理 | `yweb-core/docs/08_permission_guide.md` | RBAC 框架、角色/权限管理 |
 | 组织管理 | `yweb-core/docs/07_organization_guide.md` | 组织架构管理模块 |
+
+### 路由与控制器
+
+| 主题 | 文档路径 | 说明 |
+|------|---------|------|
+| ResourceController 类视图 | `yweb-core/docs/15_controller_guide.md` | 类视图基类、@get、路径组合、依赖注入、scan_controllers |
 
 ### 基础设施
 

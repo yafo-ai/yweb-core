@@ -230,6 +230,13 @@ from .scheduler import (
     AbstractSchedulerJobStats,
 )
 
+# 导出控制器模块
+from .controller import (
+    ResourceController,
+    get,
+    scan_controllers,
+)
+
 # 导出缓存模块
 from .cache import (
     # 装饰器（推荐）
@@ -436,6 +443,11 @@ __all__ = [
     "AbstractSchedulerJobHistory",  # 抽象模型
     "AbstractSchedulerJobStats",    # 抽象模型
     "OptionalIdCard",
+    
+    # Controller - 类视图控制器
+    "ResourceController",           # 类视图基类
+    "get",                          # @get 装饰器（标记 GET 方法）
+    "scan_controllers",             # 自动扫描注册控制器
     
     # Cache - 缓存装饰器
     "cached",                       # 通用缓存装饰器（推荐）
