@@ -256,6 +256,34 @@ from .cache import (
     CacheStats,
 )
 
+# 导出 Agent 指令模块（json-repair 为可选依赖，缺失时降级为不修复畸形 JSON，模块仍可导入）
+from .agent import (
+    # 核心类与常量
+    CommandDispatcher,
+    WILDCARD_HANDLER_NAME,
+    # 上下文与协议
+    CommandContext,
+    BaseCommandHandler,
+    # 数据模型
+    ParsedCommand,
+    CommandResult,
+    CallValue,
+    ArtifactRef,
+    # 解析函数
+    parse_command_output,
+    parse_param_string,
+    split_param_expressions,
+    # 提示词生成
+    CommandPromptBuilder,
+    # 内置 Handler
+    AssignmentHandler,
+    WriteVarHandler,
+    NotifyHandler,
+    SendMessageHandler,
+    TerminateHandler,
+    CustomFunctionHandler,
+)
+
 __all__ = [
     # 版本信息
     "__version__",
@@ -463,4 +491,23 @@ __all__ = [
     "MemoryBackend",                # 内存后端
     "RedisBackend",                 # Redis 后端
     "CacheStats",                   # 缓存统计
+    # Agent - 指令系统（json-repair 为可选依赖，缺失时降级为不修复畸形 JSON）
+    "CommandDispatcher",            # 指令分发器
+    "WILDCARD_HANDLER_NAME",        # 通配 Handler 注册标记
+    "CommandContext",               # 指令执行上下文协议
+    "BaseCommandHandler",           # Handler 协议
+    "ParsedCommand",                # 解析后的指令
+    "CommandResult",                # 指令执行结果
+    "CallValue",                    # 函数式内部对象
+    "ArtifactRef",                  # 工件引用（@artifact）
+    "parse_command_output",         # 从文本提取指令
+    "parse_param_string",           # 解析参数字符串
+    "split_param_expressions",      # 分割参数表达式
+    "CommandPromptBuilder",         # 指令格式提示词生成
+    "AssignmentHandler",            # 内置：选择下游角色
+    "WriteVarHandler",              # 内置：写入变量
+    "NotifyHandler",                # 内置：通知消息
+    "SendMessageHandler",           # 内置：发送消息
+    "TerminateHandler",             # 内置：终止流程
+    "CustomFunctionHandler",        # 内置：自定义函数（通配）
 ]

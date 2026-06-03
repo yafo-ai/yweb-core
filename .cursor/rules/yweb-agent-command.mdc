@@ -1,0 +1,34 @@
+---
+description: 编写或修改 Agent 指令系统（LLM 文本指令的解析 parser、分发 dispatcher、内置/自定义 Handler、提示词生成 prompt、指令 DSL）相关代码时自动激活。
+globs: yweb-core/yweb/agent/**/*.py, **/agent/parser/**/*.py, **/agent/handlers/**/*.py, **/tests/test_agent/**/*.py
+---
+
+# YWeb Agent 指令系统编码规范
+
+编写或修改指令系统（`yweb.agent`）相关代码时，**必须先阅读对应的 Skill 文档**：
+
+> **Skill 路径**：`.cursor/skills/yweb-agent-command/SKILL.md`
+>
+> **测试补充规则**：`.cursor/rules/yweb-testing.mdc` + `.cursor/rules/how-to-add-pytest-class-unit-test.mdc`
+>
+> **测试失败处置**：`.cursor/rules/test-quality-and-failure-workflow.mdc`
+
+## 关键规范速查
+
+1. **不绑定引擎**：指令系统只做解析/分发/Handler/提示词，**禁止**依赖任何具体 WorkingSpace / Graph / LLM 实现。消费者通过实现 `CommandContext` 协议桥接业务。
+2. **数据容器用 `@dataclass`**：`ParsedCommand` / `CommandResult` / `CallValue` / `ArtifactRef` 一律 `@dataclass`，不用 Pydantic（与内部数据对象约定一致）。
+3. **协议用 `Protocol` 鸭子类型**：`CommandContext`、`BaseCommandHandler` 均为 `@runtime_checkable` Protocol，自定义实现**无需继承**。
+4. **指令 DSL = 一套函数式语法**：函数 `name(...)`、数组 `[...]`、内部对象统一为函数调用 `role(name=..., message=...)`/`agent(name=..., task=...)` → `CallValue`；外部资源 `@artifact("path")` → `ArtifactRef`。
+5. **参数分隔符兼容换行与逗号**：标准写法用换行，亦兼容逗号；引号/括号内的分隔符不切分。
+6. **超集向后兼容（重要）**：解析器是 y-agent 解析的**超集**，必须同时识别新 DSL 与旧 JSON 字面量形态（如 `[{"role":...}]`）。改动解析逻辑后，回归快照 `tests/test_agent/fixtures/regression_golden.json` 必须保持全绿。
+7. **命令提取用括号平衡扫描**：`parse_command_output` 用引号/转义感知的括号匹配定位 `)`，**禁止**退回非贪婪正则（否则无法支持嵌套 `role(...)` 且会误判引号内的 `)|>`）。
+8. **Handler 超集兼容**：Handler 消费 `args` 时需同时吃新 DSL（`CallValue`）与旧 dict 形态（参考 `AssignmentHandler._extract_role_message`）。
+9. **dispatch 并发安全**：`CommandDispatcher` 用 `ThreadPoolExecutor` 并发执行，`CommandContext` 的写方法（`add_message`/`write_variable`/`set_terminate`）必须线程安全。
+10. **可选依赖降级**：`json-repair` 为可选依赖（`pip install yweb[agentcmd]`），缺失时跳过畸形 JSON 修复而非报错，模块仍可导入。
+
+## 行为对齐约定
+
+- 内置 Handler 的成功/失败语义需对齐 y-agent（如 `notify`/`send_message` 空 message → `success=False`；`assignment` role 为 None → `success=False`）。
+- `CustomFunctionHandler` 是通配兜底（`WILDCARD_HANDLER_NAME`），用 `command.toolname` 作真实函数名；函数异常时 `return_value="工具错误：..."`、`success=False`。
+
+改动前不确定语义时，先阅读 Skill 与 `tests/test_agent/` 下的回归用例，不要凭猜测改解析/分发逻辑。

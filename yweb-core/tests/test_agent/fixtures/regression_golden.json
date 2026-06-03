@@ -1,0 +1,245 @@
+{
+  "_note": "yweb-core 解析行为快照。多数与 y-agent output_rules_parser_json 一致；但在引号不配对的畸形输入（如 func28/func30）上，yweb-core 采用引号感知的括号平衡扫描（支持嵌套函数调用），有意与 y-agent 的引号无关正则分歧。",
+  "input": "\n\n\n          参数客服:command=|<|notify(message=\"惠普M233DW打印机连接电脑有几种方式：\n1. USB线连接：使用附带的USB数据线将打印机和电脑连接，安装驱动程序即可打印。\n2. 无线连接：打印机和电脑连接同一个WiFi，安装HP Smart APP或使用AirPrint、Mopria等软件即可打印。\n3. 网线连接：使用附带的网线将打印机和电脑连接，安装驱动程序即可打印。\n具体操作可以参考以下视频教程：\n1. USB连接：[视频链接](http://players.brightcove.net/1160438706001/ByLWUi0A_default/index.html?videoId=5767127329001)\n2. 无线连接：[视频链接](https://img2.haocai.com.cn/video/hp233dwwxjh.mp4)\n3. 网线连接：[视频链接](http://players.brightcove.net/1160438706001/ByLWUi0A_default/index.html?videoId=5767127329001)\")|>|\n\n\n        |<| func30(message=\"你好,今天天气不错哦，\"它\"=(很)\"好\"!!!\",message2=\"你好,今天天气不错哦，\"它\"=很\"好\"!!!) |>|\n        <| func26(param1=True, param2=[1, 2, 3], param3='value 'with' spaces', param4={'key1': \"value1\", \\'key2\\': 2) |>|\n    \n        |<| func1(param1=\"value1\") |>'\n        '|<| func2(param2=\\'value2\\') |>|'\n        '|<| func3(param3=\"value with spaces\") |>|'\n        '|<| func4(param4=\\'value with \"quotes\"\\') |>|'\n        \n        2. **数字和布尔值参数**：\n        ```python\n        '|<| func5(param1=123) |>|'\n        '|<| func6(param2=45.67) |>|'\n        '|<| func7(param3=True) |>|'\n        '|<| func8(param4=False) |>|'\n        \n        3. **列表和字典参数**：\n        ```python\n        '|<| func9(param1=[1, 2, 3]) |>|'\n        '|<| func10(param2=[\"a\", \"b\", \"c\"]) |>|'\n        '|<| func11(param3={\\'key1\\': \\'value1\\', \\'key2\\': \\'value2\\'}) |>|'\n        |<| func12(param4={\"key1\": 1, \"key2\": 2.5}) |>|\n        '|<| func13(param1=[1, \"a\", [2, \"b\"]]) |>|'\n        |<| func14(param2={\\'key1\\': [1, 2], \\'key2\\': {\\'nested\\': \\'value\\'}}) |>|\n        \n        5. **转义字符**：\n        ```python\n            \n        \n        6. **混合参数**：\n        ```python\n        '|<| func19(param1=\"value1\", param2=123, param3=[1, \"a\"], param4={\\'key\\': \\'value\\'}) |>|'\n        '|<| func20(param1=True, param2=[1, 2, 3], param3=\"value with spaces\", param4={\\'key1\\': \\'value1\\', \\'key2\\': 2}) |>|'\n        \n        7. **特殊字符和空格**：\n        ```python\n        '|<| func21(param1=\"value with \"special\", characters: !@#$%^&*()\") |>|'\n        '|<| func22(param2=\"value with spaces at end \") |>|'\n        '|<| func23(param3=\" value with spaces at start\") |>|'\n        '|<| func24(param4=\" value with spaces at both ends \") |>|'\n        \n        8. **超级特殊情况**：json缺失格式缺失、嵌套特殊情况\n        \n        '|<| func25(_param3={\\'key1\\': \\'value1\\', \\'key2\\': \\'value2\\')|>|'\n        |<| func26(param1=True, param2=[1, 2, 3, param3=\"value with spaces\", param4={\\'key1\\': \\'value1\\', \\'key2\\': 2) |>|'\n        '|<| func27(para_m16=['爱普生T6741黑墨水（C13T674180）[产品id:024562]的类型','爱普生T6744黄色墨水(C13T674480)[产品id:024565]的类型'],a=10)|>|'\n        |<| func28(param20=[ \\\"5A0843\\\"],pinpai=\\\"惠普\\\", querys=[\\\" hp   绝 对    支持      抗      层        ，    具备       物 质   特 性”，f‘ 它配备      支 配          笔 触      显示 屏”, f'具有   海 德 勒     打 姆     技术\\\"])|>|\"\n        \n        |<| func29(param17=[\n        {\\n\n        \"role\":\"商品参数客服\",\\n\n        \"message\":\"HP 'X4E75AA': Inktank,黑色打印头的适用机型\"\\n\n        },\\n\n        {\n        \"role\":\"\\n通用客服\\n\",\n        \"message\":\"店铺所售的HP坦克:\"516\"打印机是否兼容HP X4E75AA Inktank黑色打印头\"\n        }\\n\n        ]\\n\n        )|>|\n\n        |<| func30(message=\"你好，今天天气不错哦，\"它\"很\"好\"!!!) |>|\n\n        ",
+  "expected": [
+    {
+      "toolname": "notify",
+      "args": {
+        "message": "惠普M233DW打印机连接电脑有几种方式：\n1. USB线连接：使用附带的USB数据线将打印机和电脑连接，安装驱动程序即可打印。\n2. 无线连接：打印机和电脑连接同一个WiFi，安装HP Smart APP或使用AirPrint、Mopria等软件即可打印。\n3. 网线连接：使用附带的网线将打印机和电脑连接，安装驱动程序即可打印。\n具体操作可以参考以下视频教程：\n1. USB连接：[视频链接](http://players.brightcove.net/1160438706001/ByLWUi0A_default/index.html?videoId=5767127329001)\n2. 无线连接：[视频链接](https://img2.haocai.com.cn/video/hp233dwwxjh.mp4)\n3. 网线连接：[视频链接](http://players.brightcove.net/1160438706001/ByLWUi0A_default/index.html?videoId=5767127329001)"
+      }
+    },
+    {
+      "toolname": "func26",
+      "args": {
+        "param1": true,
+        "param2": [
+          1,
+          2,
+          3
+        ],
+        "param3": "value 'with' spaces",
+        "param4": {
+          "key1": "value1"
+        }
+      }
+    },
+    {
+      "toolname": "func1",
+      "args": {
+        "param1": "value1"
+      }
+    },
+    {
+      "toolname": "func2",
+      "args": {
+        "param2": "\\'value2\\'"
+      }
+    },
+    {
+      "toolname": "func3",
+      "args": {
+        "param3": "value with spaces"
+      }
+    },
+    {
+      "toolname": "func4",
+      "args": {
+        "param4": "\\'value with \"quotes\"\\'"
+      }
+    },
+    {
+      "toolname": "func5",
+      "args": {
+        "param1": 123
+      }
+    },
+    {
+      "toolname": "func6",
+      "args": {
+        "param2": 45.67
+      }
+    },
+    {
+      "toolname": "func7",
+      "args": {
+        "param3": true
+      }
+    },
+    {
+      "toolname": "func8",
+      "args": {
+        "param4": false
+      }
+    },
+    {
+      "toolname": "func9",
+      "args": {
+        "param1": [
+          1,
+          2,
+          3
+        ]
+      }
+    },
+    {
+      "toolname": "func10",
+      "args": {
+        "param2": [
+          "a",
+          "b",
+          "c"
+        ]
+      }
+    },
+    {
+      "toolname": "func11",
+      "args": {
+        "param3": {
+          "key1": "value1",
+          "key2": "value2"
+        }
+      }
+    },
+    {
+      "toolname": "func12",
+      "args": {
+        "param4": {
+          "key1": 1,
+          "key2": 2.5
+        }
+      }
+    },
+    {
+      "toolname": "func13",
+      "args": {
+        "param1": [
+          1,
+          "a",
+          [
+            2,
+            "b"
+          ]
+        ]
+      }
+    },
+    {
+      "toolname": "func14",
+      "args": {
+        "param2": {
+          "key1": [
+            1,
+            2
+          ],
+          "key2": {
+            "nested": "value"
+          }
+        }
+      }
+    },
+    {
+      "toolname": "func19",
+      "args": {
+        "param1": "value1",
+        "param2": 123,
+        "param3": [
+          1,
+          "a"
+        ],
+        "param4": {
+          "key": "value"
+        }
+      }
+    },
+    {
+      "toolname": "func20",
+      "args": {
+        "param1": true,
+        "param2": [
+          1,
+          2,
+          3
+        ],
+        "param3": "value with spaces",
+        "param4": {
+          "key1": "value1",
+          "key2": 2
+        }
+      }
+    },
+    {
+      "toolname": "func21",
+      "args": {
+        "param1": "value with \"special\", characters: !@#$%^&*()"
+      }
+    },
+    {
+      "toolname": "func22",
+      "args": {
+        "param2": "value with spaces at end "
+      }
+    },
+    {
+      "toolname": "func23",
+      "args": {
+        "param3": " value with spaces at start"
+      }
+    },
+    {
+      "toolname": "func24",
+      "args": {
+        "param4": " value with spaces at both ends "
+      }
+    },
+    {
+      "toolname": "func25",
+      "args": {
+        "_param3": {
+          "key1": "value1",
+          "key2": "value2"
+        }
+      }
+    },
+    {
+      "toolname": "func26",
+      "args": {
+        "param1": true,
+        "param2": [
+          1,
+          2,
+          3,
+          "param3=",
+          "value with spaces",
+          "param4={'key1': 'value1'",
+          "key2': 2"
+        ]
+      }
+    },
+    {
+      "toolname": "func27",
+      "args": {
+        "para_m16": [
+          "爱普生T6741黑墨水（C13T674180）[产品id:024562]的类型",
+          "爱普生T6744黄色墨水(C13T674480)[产品id:024565]的类型"
+        ],
+        "a": 10
+      }
+    },
+    {
+      "toolname": "func29",
+      "args": {
+        "param17": [
+          {
+            "role": "商品参数客服",
+            "message": "HP 'X4E75AA': Inktank,黑色打印头的适用机型"
+          },
+          "n\n        {",
+          "role\":\"\n通用客服",
+          {
+            "message": "店铺所售的HP坦克:\"516\"打印机是否兼容HP X4E75AA Inktank黑色打印头"
+          },
+          "n"
+        ]
+      }
+    }
+  ]
+}

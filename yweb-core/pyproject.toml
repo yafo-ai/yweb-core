@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "yweb"
 version = "0.1.4"
-description = "FastAPI基础类库，提供响应封装、中间件、ORM、认证、日志等基础功能"
+description = "FastAPI基础类库，提供响应封装、中间件、ORM、认证、日志、Agent 指令系统等基础功能"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
@@ -18,7 +18,9 @@ keywords = [
     "middleware",
     "jwt",
     "authentication",
-    "logging"
+    "logging",
+    "agent",
+    "llm"
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -71,6 +73,9 @@ redis = ["redis>=4.5.0"]
 # 限流支持
 ratelimit = ["slowapi>=0.1.9"]
 
+# Agent 指令系统：修复 LLM 输出的畸形 JSON（缺失时降级为不修复）
+agentcmd = ["json-repair>=0.29.0"]
+
 # 文件验证增强（magic number 检测、图片尺寸验证）
 validation = [
     "python-magic>=0.4.27",
@@ -114,6 +119,7 @@ all = [
     "python-magic>=0.4.27",
     "pillow>=10.0.0",
     "slowapi>=0.1.9",
+    "json-repair>=0.29.0",
 ]
 
 [project.urls]

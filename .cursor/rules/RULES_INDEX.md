@@ -28,6 +28,8 @@
   - 测试编写与组织规范。
 - `yweb-webapi-response.mdc`（新增）
   - WebAPI 响应规范：必须声明 `response_model`，DTO/Resp 统一写法，避免 `/docs` 出现 `string`。
+- `yweb-agent-command.mdc`（新增）
+  - Agent 指令系统规范：指令 DSL（函数式 `role()`/`agent()`/`@artifact()`）、解析/分发/Handler/提示词；引擎无关、超集兼容。
 
 ## 前端（Vue / API 封装）
 
@@ -46,6 +48,7 @@
    - API 路由：`yweb-ddd-architecture.mdc` + `yweb-webapi-response.mdc`
    - ORM 模型：`yweb-orm.mdc`
    - 前端 API：`frontend-api-conventions.mdc`
+   - Agent 指令系统：`yweb-agent-command.mdc`
 3. 涉及测试时补看 `yweb-testing.mdc` 与 pytest 命名规则。
 
 ## 维护约定
