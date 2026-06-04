@@ -125,6 +125,7 @@ app.include_router(ItemController.router, prefix="/api/v1")
 |------|------|
 | 默认 POST | 所有 public 方法默认注册为 POST |
 | `@get` 标记 | 需要 GET 的方法用 `@get` 装饰器 |
+| `@post` / `@route` | 显式声明 POST 或其他方法，并可附带路由元数据（见下） |
 | `_` 开头 = 私有 | 下划线开头的方法不注册为路由 |
 
 ```python
@@ -140,6 +141,38 @@ class MyController(ResourceController):
 ```
 
 **为什么默认 POST**：实际业务中 80% 以上的接口是写操作（create、update、delete、submit、approve...），只有少量读操作需要 GET。默认 POST 让大多数方法零配置。
+
+### 装饰器与路由元数据
+
+`@get` / `@post` 既可裸用，也可带参数声明路由元数据；`@route` 是显式指定方法的通用形式。支持的关键字与 FastAPI `APIRouter.get/post` 一致（`response_model`、`status_code`、`dependencies`、`summary`、`description`、`responses`、`deprecated` 等）。
+
+```python
+from yweb.controller import ResourceController, get, post, route
+
+class ItemController(ResourceController):
+    prefix = "/item"
+
+    @get(response_model=PageResponse[ItemDTO], summary="项目列表")
+    async def list(self, page: int = 1): ...
+
+    @post(response_model=ItemResponse[ItemDTO], status_code=201)
+    async def create(self, body: CreateItemRequest): ...
+
+    @post(dependencies=[require_role("admin")])      # 方法级依赖
+    async def delete(self, body: DeleteRequest): ...
+
+    @route("PUT", response_model=OkResponse)          # 显式指定方法
+    async def replace(self, body: ReplaceRequest): ...
+```
+
+- `dependencies` 中的可调用对象会自动包装为 `Depends(...)`，也可直接传 `Depends(...)`。
+- 未声明 `summary` 时，自动回退到方法 docstring 第一行。
+- `path=` 可覆盖默认的 `/方法名` 路径，用于方法名无法表达的路径（如连字符）：
+
+```python
+@post(path="/reset-password")          # → POST .../reset-password（而非 /reset_password）
+async def reset_password(self, body: ResetPasswordRequest): ...
+```
 
 ---
 
@@ -314,8 +347,9 @@ app.include_router(special_router, prefix="/api/v1")
 | 场景 | 推荐方式 |
 |------|---------|
 | 标准 CRUD 资源（大多数业务接口） | ResourceController |
+| 需要 `response_model` / `status_code` / 方法级依赖 | ResourceController（用 `@get`/`@post` 传参，见第 3 节） |
 | 特殊协议端点（webhook、OAuth callback） | 函数式路由 |
-| 需要细粒度 response_model 控制 | 函数式路由 |
+| 需要 RESTful 路径参数（`/{id}`）或 PUT/DELETE/PATCH | 函数式路由 |
 | 新项目、从零开始 | ResourceController |
 
 ---
@@ -421,6 +455,7 @@ app.include_router(org_router, prefix=API_PREFIX)
 
 - 方法的 docstring 第一行自动成为 Swagger 的 `summary`
 - 参数的 type hints 自动生成请求体/查询参数的 Schema
+- `response_model` / `status_code` 通过 `@get`/`@post`/`@route` 传参声明（见第 3 节）
 - `tags` 类属性控制 Swagger 分组
 
 ### 私有方法
@@ -451,6 +486,8 @@ class MyController(ResourceController):
     async def async_action(self): ...   # 异步，推荐
     def sync_action(self): ...          # 同步，也支持
 ```
+
+同步方法会生成同步端点，由 FastAPI 自动调度到线程池执行。因此**直接调用同步 ORM 的方法应写成同步 `def`**（避免在事件循环中触发 async-safety 检测）；异步方法中如需同步数据库操作，请用 `async_db_call(...)` 包装。
 
 ### 每次请求创建新实例
 

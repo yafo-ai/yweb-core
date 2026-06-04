@@ -17,6 +17,7 @@ from typing import Type, Optional, TYPE_CHECKING
 
 from fastapi import APIRouter, Query
 
+from yweb.controller import ResourceController, get
 from yweb.response import Resp, PageResponse
 from yweb.orm import DTO
 
@@ -24,34 +25,39 @@ if TYPE_CHECKING:
     from ..models import AbstractLoginRecord
 
 
-def create_login_record_router(
-    login_record_model: Type["AbstractLoginRecord"],
-) -> APIRouter:
-    """创建登录记录查询路由
+# ==================== DTO 定义 ====================
 
-    Args:
-        login_record_model: 登录记录模型类（AbstractLoginRecord 的子类）
+class LoginRecordItem(DTO):
+    """登录记录响应"""
+    username: str = ""
+    ip_address: str = ""
+    user_agent: Optional[str] = None
+    created_at: str = ""
+    status: str = ""
+    failure_reason: Optional[str] = None
 
-    Returns:
-        APIRouter，包含登录记录查询路由
-    """
-    router = APIRouter()
 
-    # ==================== DTO 定义 ====================
+# ==================== 模型注入 ====================
 
-    class LoginRecordItem(DTO):
-        """登录记录响应"""
-        username: str = ""
-        ip_address: str = ""
-        user_agent: Optional[str] = None
-        created_at: str = ""
-        status: str = ""
-        failure_reason: Optional[str] = None
+_login_record_model = None
 
-    # ==================== 路由定义 ====================
 
-    @router.get("/list", response_model=PageResponse[LoginRecordItem], summary="查询登录记录")
-    def list_login_records(
+def init_login_record_controller(login_record_model: Type["AbstractLoginRecord"]) -> None:
+    """注入登录记录模型类（挂载路由前调用）。"""
+    global _login_record_model
+    _login_record_model = login_record_model
+
+
+# ==================== 控制器 ====================
+
+class LoginRecordController(ResourceController):
+    """登录记录查询控制器。"""
+
+    prefix = ""
+
+    @get(response_model=PageResponse[LoginRecordItem], summary="查询登录记录")
+    def list(
+        self,
         username: Optional[str] = Query(None, description="用户名，支持模糊查询"),
         ip_address: Optional[str] = Query(None, description="登录IP地址"),
         status: Optional[str] = Query(None, description="登录状态 (success, failed, pending)"),
@@ -62,23 +68,40 @@ def create_login_record_router(
 
         根据用户名、IP地址、状态等条件查询登录记录
         """
-        query = login_record_model.query.with_entities(
-            login_record_model.username,
-            login_record_model.ip_address,
-            login_record_model.user_agent,
-            login_record_model.created_at,
-            login_record_model.status,
-            login_record_model.failure_reason,
-        ).order_by(login_record_model.created_at.desc())
+        query = _login_record_model.query.with_entities(
+            _login_record_model.username,
+            _login_record_model.ip_address,
+            _login_record_model.user_agent,
+            _login_record_model.created_at,
+            _login_record_model.status,
+            _login_record_model.failure_reason,
+        ).order_by(_login_record_model.created_at.desc())
 
         if username:
-            query = query.filter(login_record_model.username.ilike(f"%{username}%"))
+            query = query.filter(_login_record_model.username.ilike(f"%{username}%"))
         if ip_address:
-            query = query.filter(login_record_model.ip_address.ilike(f"%{ip_address}%"))
+            query = query.filter(_login_record_model.ip_address.ilike(f"%{ip_address}%"))
         if status:
-            query = query.filter(login_record_model.status == status.lower())
+            query = query.filter(_login_record_model.status == status.lower())
 
         page_result = query.paginate(page=page, page_size=page_size)
         return Resp.OK(LoginRecordItem.from_page(page_result))
 
+
+def create_login_record_router(
+    login_record_model: Type["AbstractLoginRecord"],
+) -> APIRouter:
+    """创建登录记录查询路由
+
+    注入模型后返回 LoginRecordController 路由。
+
+    Args:
+        login_record_model: 登录记录模型类（AbstractLoginRecord 的子类）
+
+    Returns:
+        APIRouter，包含登录记录查询路由
+    """
+    init_login_record_controller(login_record_model)
+    router = APIRouter()
+    router.include_router(LoginRecordController.router)
     return router

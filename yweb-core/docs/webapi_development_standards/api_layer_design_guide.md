@@ -450,18 +450,20 @@ async def delete_department(dept_id: int = Query(...)):
 
 ```python
 from yweb import Resp
-from yweb.controller import ResourceController, get
+from yweb.response import PageResponse, ItemResponse
+from yweb.controller import ResourceController, get, post
 
 class DepartmentController(ResourceController):
     prefix = "/department"
     tags = ["部门管理"]
 
-    @get
+    @get(response_model=PageResponse[DepartmentResponse])
     async def list(self, page: int = 1, size: int = 10):
         """获取部门列表"""
         result = DepartmentModel.paginate(page=page, per_page=size)
         return Resp.OK(DepartmentResponse.from_page(result))
 
+    @post(response_model=ItemResponse[DepartmentResponse])
     async def create(self, data: DepartmentCreate):
         """创建部门"""
         try:
@@ -470,6 +472,8 @@ class DepartmentController(ResourceController):
         except ValueError as e:
             return Resp.BadRequest(message=str(e))
 ```
+
+> 类视图同样满足 [3.0 必须声明 `response_model`](#30-必须声明-response_model)：用 `@get`/`@post` 传参即可。
 
 ### 6.2 职责不变
 
@@ -489,8 +493,9 @@ class DepartmentController(ResourceController):
 | 场景 | 推荐 |
 |------|------|
 | 标准 CRUD 资源（用户、部门、订单...） | ResourceController |
+| 需要 `response_model` / `status_code` / 方法级依赖 | ResourceController（`@get`/`@post` 传参） |
 | 特殊协议端点（webhook、OAuth callback） | 函数式路由 |
-| 需要精细 response_model 控制 | 函数式路由 |
+| 需要 RESTful 路径参数（`/{id}`）或 PUT/DELETE/PATCH | 函数式路由 |
 | 新项目、统一风格 | ResourceController |
 
 两种方式可以在同一项目中共存。详见 [ResourceController 类视图指南](../15_controller_guide.md)。

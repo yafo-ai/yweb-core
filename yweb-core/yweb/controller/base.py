@@ -26,7 +26,7 @@ ResourceController —— 类视图路由控制器基类。
 import inspect
 from typing import ClassVar
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, params
 
 
 class ResourceController:
@@ -76,18 +76,38 @@ class ResourceController:
                 continue
 
             endpoint = cls._make_endpoint(method, attr_name)
+            http_method = getattr(method, "_http_method", None) or "POST"
+            route_kwargs = cls._build_route_kwargs(method)
 
-            http_method = getattr(method, "_http_method", None)
-            if http_method == "GET":
-                cls.router.get(
-                    f"/{attr_name}",
-                    summary=cls._get_summary(method),
-                )(endpoint)
-            else:
-                cls.router.post(
-                    f"/{attr_name}",
-                    summary=cls._get_summary(method),
-                )(endpoint)
+            # 默认路径为 /方法名，可用装饰器的 path= 覆盖（如连字符路径）
+            path = getattr(method, "_route_path", None) or f"/{attr_name}"
+
+            register = cls.router.get if http_method == "GET" else cls.router.post
+            register(path, **route_kwargs)(endpoint)
+
+    @classmethod
+    def _build_route_kwargs(cls, method) -> dict:
+        """汇总传给 APIRouter.get/post 的关键字参数。
+
+        - 读取 @get/@post/@route 写入的 _route_kwargs（response_model、status_code、
+          dependencies、summary 等）
+        - summary 缺省时回退到 docstring 第一行
+        - dependencies 中的可调用对象自动包装为 Depends
+        """
+        route_kwargs = dict(getattr(method, "_route_kwargs", {}) or {})
+
+        if "summary" not in route_kwargs:
+            summary = cls._get_summary(method)
+            if summary:
+                route_kwargs["summary"] = summary
+
+        deps = route_kwargs.get("dependencies")
+        if deps:
+            route_kwargs["dependencies"] = [
+                d if isinstance(d, params.Depends) else Depends(d) for d in deps
+            ]
+
+        return route_kwargs
 
     @classmethod
     def _make_endpoint(cls, method, name: str):
@@ -107,7 +127,9 @@ class ResourceController:
                 instance = cls()
                 return await method(instance, **kwargs)
         else:
-            async def endpoint(**kwargs):
+            # 同步方法生成同步端点，FastAPI 会自动放入线程池执行，
+            # 避免在事件循环中直接调用同步 ORM（触发 async-safety 检测）。
+            def endpoint(**kwargs):
                 instance = cls()
                 return method(instance, **kwargs)
 
