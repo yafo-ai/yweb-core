@@ -102,7 +102,7 @@ class UserController(ResourceController):
 - 默认 POST，`@get` 标记 GET
 - `_` 开头方法为私有辅助，不注册路由
 - `dependencies` 类属性注入 Router 级依赖
-- 每个 controller 必须显式声明 `prefix`；没有额外前缀时写 `prefix = ""`
+- 每个 `ResourceController` 必须显式声明 `prefix`，不得省略或依赖默认值；没有额外前缀时也必须写 `prefix = ""`
 
 ### ResourceController 运行时依赖绑定（强制）
 
@@ -132,7 +132,10 @@ def create_user_router(user_model: type) -> APIRouter:
 - 禁止使用 `_xxx_model`、`_scheduler`、`_acl_service` 等模块级变量保存 router 工厂参数
 - 禁止新增 `init_xxx_controller(...)` 这类修改全局状态或类变量的注入函数
 - 使用运行时依赖的 controller 不直接挂载 `Controller.router`，也不纳入 `scan_controllers`
-- 运行时决定端点是否注册、协议路径必须严格保持原形、或包含大量动态回调的模块，继续使用函数式路由
+- 某一组可选 API 是否挂载取决于配置时，按能力组拆成独立 `ResourceController`，在工厂层用 `if xxx: include_router(...)` 条件挂载
+- 相关小 controller 可以放在同一个 `.py` 文件里；用外层 `include_router(prefix=...)` + controller `prefix` 保持 URL 不变，`prefix = ""` 表示不增加额外路径层级
+- 不要在一个大 controller 方法内部用运行时 `if/else` 隐藏端点是否存在，也不要把 `lambda/when/build` 作为默认方案
+- 只有特殊协议端点、RESTful 强路径约束，或拆分后明显更难读的模块，继续使用函数式路由
 
 ### 函数式路由
 

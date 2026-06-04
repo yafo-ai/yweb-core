@@ -15,9 +15,9 @@
 ## 后端（YWeb / Python）
 
 - `yweb-framework.mdc`
-  - yweb 框架总规范入口；提供 DDD、ResourceController 运行时依赖绑定、异常、事务、响应等总览。
+  - yweb 框架总规范入口；提供 DDD、ResourceController 运行时依赖绑定、可选能力组拆分、异常、事务、响应等总览。
 - `yweb-ddd-architecture.mdc`
-  - DDD 分层职责边界（API/Service/Domain）；瘦 API 原则；ResourceController 强制写法。
+  - DDD 分层职责边界（API/Service/Domain）；瘦 API 原则；ResourceController 与可选能力组强制写法。
 - `yweb-orm.mdc`
   - ORM 模型定义、字段 comment、SQLAlchemy 2.0 风格、事务边界。
 - `yweb-auth.mdc`

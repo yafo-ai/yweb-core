@@ -346,12 +346,103 @@ def create_login_record_router(login_record_model: Type[AbstractLoginRecord]) ->
 | 对外入口 | 模块应暴露 `create_xxx_router(...)`，由它接收运行时依赖并返回 `APIRouter` |
 | 禁止模块级注入状态 | 不允许用 `_xxx_model`、`_scheduler`、`_acl_service` 这类模块变量承载 router 工厂传入的依赖 |
 | 禁止初始化函数注入 | 不允许新增 `init_xxx_controller(...)` 再修改全局变量或 controller 类变量 |
-| 显式 prefix | 每个 controller 必须显式声明 `prefix`；模块本身就是资源时写 `prefix = ""` |
+| 显式 prefix | 每个 `ResourceController` 必须显式声明 `prefix`，不得省略或依赖默认值；模块本身就是资源时也必须写 `prefix = ""` |
 | 挂载方式 | 使用运行时依赖的 controller 只能挂载 `create_xxx_router(...)` 的返回值，不应直接挂 `Controller.router` |
 | 自动扫描 | 使用运行时依赖的 controller 不走 `scan_controllers`，因为扫描阶段无法知道依赖值 |
 | 请求状态 | 当前请求相关的数据仍然放在方法局部变量、参数或 FastAPI `Depends` 中，不放到 class attribute 上 |
 
 `create_router(...)` 每次都会生成一份绑定了属性的 controller 子类和独立 `APIRouter`。这些绑定属性属于该 router，不会因为另一个 router 再次绑定而被覆盖。下划线开头的实例方法仍然可以作为内部 helper 使用，不会被注册为 API。
+
+### 可选能力组
+
+如果某一组 API 是否存在取决于运行时配置，不要把条件藏到 controller 方法里，也不要为了条件注册引入额外的 `when/lambda` 机制。优先把可选能力拆成独立 controller，由 router 工厂决定是否 `include_router(...)`。
+
+多个 controller 可以放在同一个 `.py` 文件中；拆分的是能力边界，不一定是文件边界。最终路径由 FastAPI 原生前缀组合得到：
+
+```text
+最终路径 = 应用/总路由 prefix + include_router prefix + controller prefix + 方法路径
+```
+
+`prefix = ""` 表示这个 controller 不额外增加路径层级，只使用外层 `include_router(prefix=...)` 提供的资源路径。
+
+```python
+class PermissionController(ResourceController):
+    prefix = ""
+    permission_model = None
+
+    @get(response_model=PageResponse[PermissionItem])
+    def list(self): ...
+
+
+class APIResourceController(ResourceController):
+    prefix = ""
+    api_resource_model = None
+    permission_model = None
+
+    @get(response_model=PageResponse[APIResourceItem])
+    def list(self): ...
+
+
+def create_permission_router(permission_model, api_resource_model=None) -> APIRouter:
+    router = APIRouter(prefix="/permission")
+    router.include_router(
+        PermissionController.create_router(permission_model=permission_model),
+        prefix="/permissions",
+    )
+
+    if api_resource_model:
+        router.include_router(
+            APIResourceController.create_router(
+                api_resource_model=api_resource_model,
+                permission_model=permission_model,
+            ),
+            prefix="/api-resources",
+        )
+
+    return router
+```
+
+这样 `api_resource_model` 未传入时，`/api-resources/*` 不会注册，Swagger 也不会显示这组接口；传入后才注册。这个写法保留 FastAPI 原生的条件挂载语义，同时让每组 API 的实现保持类视图结构。
+
+拆分后的 controller 仍然可以共享同一个外层前缀来保持 URL 不变：
+
+```python
+class DepartmentController(ResourceController):
+    prefix = ""
+
+    @get(response_model=PageResponse[DepartmentItem])
+    def list(self): ...
+
+
+class DepartmentEmployeeController(ResourceController):
+    prefix = "/employees"
+
+    @get(response_model=PageResponse[EmployeeItem])
+    def list(self): ...
+
+
+def create_department_router(dept_model, employee_model=None) -> APIRouter:
+    router = APIRouter(prefix="/departments")
+    router.include_router(
+        DepartmentController.create_router(dept_model=dept_model),
+    )
+
+    if employee_model:
+        router.include_router(
+            DepartmentEmployeeController.create_router(employee_model=employee_model),
+        )
+
+    return router
+```
+
+对应路径：
+
+```text
+/departments/list
+/departments/employees/list
+```
+
+这比在一个大 controller 内部散落运行时 `if/else` 更清晰：controller 只声明固定端点，工厂层负责根据配置组装能力。
 
 ---
 
@@ -402,8 +493,10 @@ app.include_router(special_router, prefix="/api/v1")
 | 标准 CRUD 资源（大多数业务接口） | ResourceController |
 | 需要 `response_model` / `status_code` / 方法级依赖 | ResourceController（用 `@get`/`@post` 传参，见第 3 节） |
 | 路由集合固定，但 model/service/scheduler 运行时传入 | ResourceController + `create_xxx_router(...)` + `Controller.create_router(...)` |
+| 某一组可选 API 运行时才决定是否挂载 | 独立 ResourceController + 工厂层条件 `include_router(...)`；可同文件多 controller |
 | 特殊协议端点（webhook、OAuth callback） | 函数式路由 |
-| 运行时决定是否注册某些端点 | 函数式路由 |
+| 多个方法各自有运行时开关 | 优先按能力组拆成多个 ResourceController，再由工厂层条件挂载 |
+| 拆分后明显更难读、或协议路径强约束 | 函数式路由 |
 | 需要 RESTful 路径参数（`/{id}`）或 PUT/DELETE/PATCH | 函数式路由 |
 | 新项目、从零开始 | ResourceController |
 
