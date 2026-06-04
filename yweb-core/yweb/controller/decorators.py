@@ -103,16 +103,28 @@ def post(func: Optional[Callable] = None, **kwargs: Any):
     return decorator
 
 
+_ALLOWED_METHODS = {"GET", "POST"}
+
+
 def route(method: str = "POST", **kwargs: Any):
     """通用路由装饰器，显式指定 HTTP 方法与元数据。
+
+    ResourceController 只允许 GET 和 POST，传入其他方法会抛出 ValueError。
+    如需 PUT/DELETE/PATCH 等方法，请使用函数式路由。
 
     使用示例::
 
         @route("GET", response_model=Foo)
         async def list(self): ...
     """
+    method = method.upper()
+    if method not in _ALLOWED_METHODS:
+        raise ValueError(
+            f"ResourceController 只允许 GET/POST，收到 '{method}'。"
+            f"如需 {method} 请使用函数式路由。"
+        )
 
     def decorator(f: Callable) -> Callable:
-        return _set_route_meta(f, http_method=method.upper(), **kwargs)
+        return _set_route_meta(f, http_method=method, **kwargs)
 
     return decorator

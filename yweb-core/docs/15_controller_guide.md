@@ -144,10 +144,10 @@ class MyController(ResourceController):
 
 ### 装饰器与路由元数据
 
-`@get` / `@post` 既可裸用，也可带参数声明路由元数据；`@route` 是显式指定方法的通用形式。支持的关键字与 FastAPI `APIRouter.get/post` 一致（`response_model`、`status_code`、`dependencies`、`summary`、`description`、`responses`、`deprecated` 等）。
+`@get` / `@post` 既可裸用，也可带参数声明路由元数据；`@route` 是显式指定方法的通用形式（仅允许 GET/POST）。支持的关键字与 FastAPI `APIRouter.get/post` 一致（`response_model`、`status_code`、`dependencies`、`summary`、`description`、`responses`、`deprecated` 等）。
 
 ```python
-from yweb.controller import ResourceController, get, post, route
+from yweb.controller import ResourceController, get, post
 
 class ItemController(ResourceController):
     prefix = "/item"
@@ -160,9 +160,6 @@ class ItemController(ResourceController):
 
     @post(dependencies=[require_role("admin")])      # 方法级依赖
     async def delete(self, body: DeleteRequest): ...
-
-    @route("PUT", response_model=OkResponse)          # 显式指定方法
-    async def replace(self, body: ReplaceRequest): ...
 ```
 
 - `dependencies` 中的可调用对象会自动包装为 `Depends(...)`，也可直接传 `Depends(...)`。

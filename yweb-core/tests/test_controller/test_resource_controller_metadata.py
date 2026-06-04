@@ -14,7 +14,8 @@ from fastapi import FastAPI, Depends
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
-from yweb.controller import ResourceController, get, post, route
+from yweb.controller import ResourceController, get, post
+from yweb.controller.decorators import route
 
 
 class ItemOut(BaseModel):

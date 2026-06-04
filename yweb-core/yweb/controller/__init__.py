@@ -31,13 +31,12 @@ yweb.controller —— 类视图路由控制器
 """
 
 from .base import ResourceController
-from .decorators import get, post, route
+from .decorators import get, post
 from .scanner import scan_controllers
 
 __all__ = [
     "ResourceController",
     "get",
     "post",
-    "route",
     "scan_controllers",
 ]
