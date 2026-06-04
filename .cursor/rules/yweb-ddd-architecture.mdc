@@ -27,3 +27,5 @@ globs: **/api/**/*.py, **/services/**/*.py, **/domain/**/*.py
 - 异常统一捕获 `ValueError`，转为 `Resp.BadRequest()`
 - 简单纯查询可由 API 层直接调用模型，无需经过 Service
 - **async 安全（重要）**：涉及 ORM 调用的路由**优先用 `def`**（FastAPI 自动放线程池）；若路由必须 `async def`（需要 await 其他异步操作），ORM 调用必须用 `await async_db_call(...)` 包装，**禁止**在 `async def` 中直接调 ORM
+- **ResourceController 运行时依赖绑定（强制）**：路由集合固定但 model/service/scheduler 由应用装配层传入时，模块必须暴露 `create_xxx_router(...)`，并在工厂内调用 `Controller.create_router(name=value)`；禁止 `_xxx_model`、`_scheduler`、`_acl_service` 这类模块级注入状态，禁止 `init_xxx_controller(...)`
+- **显式 prefix（强制）**：每个 `ResourceController` 必须显式声明 `prefix`；没有额外前缀时写 `prefix = ""`

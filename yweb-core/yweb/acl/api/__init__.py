@@ -4,9 +4,9 @@ ACL 模块 - API 路由组装
 
 from fastapi import APIRouter
 
-from .rule_controller import AclRuleController, init_rule_controller
-from .resource_controller import AclResourceController, init_resource_controller
-from .permission_controller import AclPermissionController, init_permission_controller
+from .rule_controller import AclRuleController, create_rule_router
+from .resource_controller import AclResourceController, create_resource_router
+from .permission_controller import AclPermissionController, create_permission_router
 
 
 def create_acl_router(
@@ -24,20 +24,18 @@ def create_acl_router(
     Returns:
         包含所有 ACL 端点的 APIRouter
     """
-    if acl_service is not None:
-        init_rule_controller(acl_service)
-        init_resource_controller(acl_service)
-        init_permission_controller(acl_service)
-
     acl_router = APIRouter(tags=tags or ["ACL"])
-    acl_router.include_router(AclRuleController.router)
-    acl_router.include_router(AclResourceController.router)
-    acl_router.include_router(AclPermissionController.router)
+    acl_router.include_router(create_rule_router(acl_service))
+    acl_router.include_router(create_resource_router(acl_service))
+    acl_router.include_router(create_permission_router(acl_service))
     return acl_router
 
 
 __all__ = [
     "create_acl_router",
+    "create_rule_router",
+    "create_resource_router",
+    "create_permission_router",
     "AclRuleController",
     "AclResourceController",
     "AclPermissionController",

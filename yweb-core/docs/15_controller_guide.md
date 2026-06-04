@@ -11,10 +11,11 @@
 3. [HTTP 方法约定](#3-http-方法约定)
 4. [路径分层组合](#4-路径分层组合)
 5. [依赖注入](#5-依赖注入)
-6. [自动扫描注册](#6-自动扫描注册)
-7. [与函数式路由共存](#7-与函数式路由共存)
-8. [完整项目示例](#8-完整项目示例)
-9. [注意事项](#9-注意事项)
+6. [运行时依赖绑定](#6-运行时依赖绑定)
+7. [自动扫描注册](#7-自动扫描注册)
+8. [与函数式路由共存](#8-与函数式路由共存)
+9. [完整项目示例](#9-完整项目示例)
+10. [注意事项](#10-注意事项)
 
 ---
 
@@ -301,7 +302,60 @@ class OrderController(ResourceController):
 
 ---
 
-## 6. 自动扫描注册
+## 6. 运行时依赖绑定
+
+当 controller 依赖的 model、service、scheduler 等对象需要在 `create_xxx_router(...)` 被调用时才能确定，必须通过 `ResourceController.create_router(...)` 生成独立 router。
+
+```python
+from typing import Type
+
+from fastapi import APIRouter, Query
+
+from yweb.controller import ResourceController, get
+from yweb.response import Resp, PageResponse
+
+
+class LoginRecordController(ResourceController):
+    prefix = ""
+    tags = ["登录记录"]
+    login_record_model = None
+
+    @get(response_model=PageResponse[LoginRecordItem], summary="查询登录记录")
+    def list(
+        self,
+        username: str | None = Query(None, description="用户名，支持模糊查询"),
+        page: int = Query(1, ge=1),
+        page_size: int = Query(10, ge=1, le=100),
+    ):
+        model = self.login_record_model
+        query = model.query.order_by(model.created_at.desc())
+        if username:
+            query = query.filter(model.username.ilike(f"%{username}%"))
+        return Resp.OK(LoginRecordItem.from_page(query.paginate(page=page, page_size=page_size)))
+
+
+def create_login_record_router(login_record_model: Type[AbstractLoginRecord]) -> APIRouter:
+    return LoginRecordController.create_router(login_record_model=login_record_model)
+```
+
+强制规范：
+
+| 规则 | 要求 |
+|------|------|
+| 运行时依赖 | 必须通过 `Controller.create_router(name=value)` 绑定 |
+| 对外入口 | 模块应暴露 `create_xxx_router(...)`，由它接收运行时依赖并返回 `APIRouter` |
+| 禁止模块级注入状态 | 不允许用 `_xxx_model`、`_scheduler`、`_acl_service` 这类模块变量承载 router 工厂传入的依赖 |
+| 禁止初始化函数注入 | 不允许新增 `init_xxx_controller(...)` 再修改全局变量或 controller 类变量 |
+| 显式 prefix | 每个 controller 必须显式声明 `prefix`；模块本身就是资源时写 `prefix = ""` |
+| 挂载方式 | 使用运行时依赖的 controller 只能挂载 `create_xxx_router(...)` 的返回值，不应直接挂 `Controller.router` |
+| 自动扫描 | 使用运行时依赖的 controller 不走 `scan_controllers`，因为扫描阶段无法知道依赖值 |
+| 请求状态 | 当前请求相关的数据仍然放在方法局部变量、参数或 FastAPI `Depends` 中，不放到 class attribute 上 |
+
+`create_router(...)` 每次都会生成一份绑定了属性的 controller 子类和独立 `APIRouter`。这些绑定属性属于该 router，不会因为另一个 router 再次绑定而被覆盖。下划线开头的实例方法仍然可以作为内部 helper 使用，不会被注册为 API。
+
+---
+
+## 7. 自动扫描注册
 
 对于约定式项目结构，可以用 `scan_controllers` 一行完成所有控制器的注册：
 
@@ -316,9 +370,11 @@ scan_controllers(app, package="app.api.v1", prefix="/api/v1")
 
 适合项目目录结构已经与 URL 路径对应的场景。
 
+如果 controller 依赖运行时传入的 model/service/scheduler，必须使用第 6 节的 `create_xxx_router(...)` 工厂手动挂载，不纳入自动扫描。
+
 ---
 
-## 7. 与函数式路由共存
+## 8. 与函数式路由共存
 
 ResourceController 和函数式路由可以在同一项目中共存。两者都是标准的 `APIRouter`：
 
@@ -345,13 +401,15 @@ app.include_router(special_router, prefix="/api/v1")
 |------|---------|
 | 标准 CRUD 资源（大多数业务接口） | ResourceController |
 | 需要 `response_model` / `status_code` / 方法级依赖 | ResourceController（用 `@get`/`@post` 传参，见第 3 节） |
+| 路由集合固定，但 model/service/scheduler 运行时传入 | ResourceController + `create_xxx_router(...)` + `Controller.create_router(...)` |
 | 特殊协议端点（webhook、OAuth callback） | 函数式路由 |
+| 运行时决定是否注册某些端点 | 函数式路由 |
 | 需要 RESTful 路径参数（`/{id}`）或 PUT/DELETE/PATCH | 函数式路由 |
 | 新项目、从零开始 | ResourceController |
 
 ---
 
-## 8. 完整项目示例
+## 9. 完整项目示例
 
 ### 目录结构
 
@@ -446,7 +504,7 @@ app.include_router(org_router, prefix=API_PREFIX)
 
 ---
 
-## 9. 注意事项
+## 10. 注意事项
 
 ### OpenAPI 文档
 
@@ -489,3 +547,5 @@ class MyController(ResourceController):
 ### 每次请求创建新实例
 
 ResourceController 是无状态的——每次请求创建一个新的类实例。不要在实例上存储跨请求状态。
+
+通过 `create_router(...)` 绑定的 model/service/scheduler 是 router 级配置，不是请求状态；它们应当是稳定的依赖引用。请求过程中产生的数据必须放在方法局部变量、参数或 FastAPI `Depends` 中。

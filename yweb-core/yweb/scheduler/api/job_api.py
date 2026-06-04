@@ -39,15 +39,6 @@ class RunJobResponse(DTO):
     job_code: str = ""
 
 
-_scheduler = None
-
-
-def init_job_controller(scheduler) -> None:
-    """注入 Scheduler 实例（挂载路由前调用）。"""
-    global _scheduler
-    _scheduler = scheduler
-
-
 class JobController(ResourceController):
     """任务管理控制器。
 
@@ -62,11 +53,13 @@ class JobController(ResourceController):
 
     prefix = "/jobs"
     tags = ["Scheduler"]
+    scheduler = None
 
     @get(summary="获取所有任务")
     def list(self):
         """获取所有注册的任务列表"""
-        jobs = _scheduler.get_jobs()
+        scheduler = self.scheduler
+        jobs = scheduler.get_jobs()
         return Resp.OK(data=[
             JobResponse.from_dict(j)
             for j in jobs
@@ -76,7 +69,8 @@ class JobController(ResourceController):
     @get(summary="获取任务详情")
     def get(self, code: str = Query(..., description="任务编码")):
         """获取指定任务的详细信息"""
-        job = _scheduler.get_job(code)
+        scheduler = self.scheduler
+        job = scheduler.get_job(code)
         if not job:
             return Resp.NotFound(message=f"任务 {code} 不存在")
         return Resp.OK(data=JobResponse.from_dict(job))
@@ -84,7 +78,8 @@ class JobController(ResourceController):
     @post(summary="立即执行任务")
     def run(self, code: str = Query(..., description="任务编码")):
         """立即执行指定任务（不影响正常调度）"""
-        run_id = _scheduler.run_job(code)
+        scheduler = self.scheduler
+        run_id = scheduler.run_job(code)
         if not run_id:
             return Resp.NotFound(message=f"任务 {code} 不存在")
         return Resp.OK(
@@ -95,7 +90,8 @@ class JobController(ResourceController):
     @post(summary="暂停任务")
     def pause(self, code: str = Query(..., description="任务编码")):
         """暂停指定任务"""
-        result = _scheduler.pause_job(code)
+        scheduler = self.scheduler
+        result = scheduler.pause_job(code)
         if not result:
             return Resp.NotFound(message=f"任务 {code} 不存在或暂停失败")
         return Resp.OK(message=f"任务 {code} 已暂停")
@@ -103,7 +99,8 @@ class JobController(ResourceController):
     @post(summary="恢复任务")
     def resume(self, code: str = Query(..., description="任务编码")):
         """恢复暂停的任务"""
-        result = _scheduler.resume_job(code)
+        scheduler = self.scheduler
+        result = scheduler.resume_job(code)
         if not result:
             return Resp.NotFound(message=f"任务 {code} 不存在或恢复失败")
         return Resp.OK(message=f"任务 {code} 已恢复")
@@ -111,7 +108,8 @@ class JobController(ResourceController):
     @post(summary="删除任务")
     def delete(self, code: str = Query(..., description="任务编码")):
         """删除指定任务"""
-        result = _scheduler.remove_job(code)
+        scheduler = self.scheduler
+        result = scheduler.remove_job(code)
         if not result:
             return Resp.NotFound(message=f"任务 {code} 不存在")
         return Resp.OK(message=f"任务 {code} 已删除")
@@ -126,7 +124,4 @@ def create_job_router(scheduler) -> APIRouter:
     Returns:
         APIRouter
     """
-    init_job_controller(scheduler)
-    router = APIRouter()
-    router.include_router(JobController.router)
-    return router
+    return JobController.create_router(scheduler=scheduler)

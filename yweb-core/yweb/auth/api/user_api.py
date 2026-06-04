@@ -99,23 +99,13 @@ class ResetPasswordRequest(PydanticBaseModel):
     password: str
 
 
-# ==================== 模型注入 ====================
-
-_user_model = None
-
-
-def init_user_controller(user_model: Type["AbstractUser"]) -> None:
-    """注入用户模型类（挂载路由前调用）。"""
-    global _user_model
-    _user_model = user_model
-
-
 # ==================== 控制器 ====================
 
 class UserController(ResourceController):
     """用户管理控制器（方法名即路由路径）。"""
 
     prefix = ""
+    user_model = None
 
     @get(response_model=PageResponse[UserResponse], summary="搜索用户列表")
     def list(
@@ -137,7 +127,8 @@ class UserController(ResourceController):
         elif status == "inactive":
             is_active = False
 
-        page_result = _user_model.search_with_roles(
+        user_model = self.user_model
+        page_result = user_model.search_with_roles(
             keyword=keyword,
             is_active=is_active,
             role_code=role,
@@ -149,7 +140,8 @@ class UserController(ResourceController):
     @get(response_model=ItemResponse[UserDetailResponse], summary="获取用户详情")
     def get(self, user_id: int = Query(..., description="用户ID")):
         """获取用户详情"""
-        user = _user_model.get(user_id)
+        user_model = self.user_model
+        user = user_model.get(user_id)
         if not user:
             return Resp.NotFound("用户不存在")
         return Resp.OK(UserDetailResponse.from_entity(user))
@@ -158,7 +150,8 @@ class UserController(ResourceController):
     def create(self, request: CreateUserRequest):
         """创建用户（自动验证 + 密码哈希）"""
         try:
-            user = _user_model.create_user(
+            user_model = self.user_model
+            user = user_model.create_user(
                 username=request.username,
                 password=request.password,
                 email=request.email,
@@ -177,7 +170,8 @@ class UserController(ResourceController):
         user_id: int = Query(..., description="用户ID"),
     ):
         """更新用户信息"""
-        user = _user_model.get(user_id)
+        user_model = self.user_model
+        user = user_model.get(user_id)
         if not user:
             return Resp.NotFound("用户不存在")
 
@@ -195,7 +189,8 @@ class UserController(ResourceController):
     @post(response_model=ItemResponse[UserResponse], summary="启用用户")
     def enable(self, user_id: int = Query(..., description="用户ID")):
         """启用用户"""
-        user = _user_model.get(user_id)
+        user_model = self.user_model
+        user = user_model.get(user_id)
         if not user:
             return Resp.NotFound("用户不存在")
 
@@ -206,7 +201,8 @@ class UserController(ResourceController):
     @post(response_model=ItemResponse[UserResponse], summary="禁用用户")
     def disable(self, user_id: int = Query(..., description="用户ID")):
         """禁用用户"""
-        user = _user_model.get(user_id)
+        user_model = self.user_model
+        user = user_model.get(user_id)
         if not user:
             return Resp.NotFound("用户不存在")
 
@@ -221,7 +217,8 @@ class UserController(ResourceController):
         user_id: int = Query(..., description="用户ID"),
     ):
         """重置用户密码"""
-        user = _user_model.get(user_id)
+        user_model = self.user_model
+        user = user_model.get(user_id)
         if not user:
             return Resp.NotFound("用户不存在")
 
@@ -247,7 +244,4 @@ def create_user_router(
     Returns:
         APIRouter，包含用户 CRUD 路由
     """
-    init_user_controller(user_model)
-    router = APIRouter()
-    router.include_router(UserController.router)
-    return router
+    return UserController.create_router(user_model=user_model)

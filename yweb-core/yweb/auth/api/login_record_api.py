@@ -37,23 +37,13 @@ class LoginRecordItem(DTO):
     failure_reason: Optional[str] = None
 
 
-# ==================== 模型注入 ====================
-
-_login_record_model = None
-
-
-def init_login_record_controller(login_record_model: Type["AbstractLoginRecord"]) -> None:
-    """注入登录记录模型类（挂载路由前调用）。"""
-    global _login_record_model
-    _login_record_model = login_record_model
-
-
 # ==================== 控制器 ====================
 
 class LoginRecordController(ResourceController):
     """登录记录查询控制器。"""
 
     prefix = ""
+    login_record_model = None
 
     @get(response_model=PageResponse[LoginRecordItem], summary="查询登录记录")
     def list(
@@ -68,21 +58,22 @@ class LoginRecordController(ResourceController):
 
         根据用户名、IP地址、状态等条件查询登录记录
         """
-        query = _login_record_model.query.with_entities(
-            _login_record_model.username,
-            _login_record_model.ip_address,
-            _login_record_model.user_agent,
-            _login_record_model.created_at,
-            _login_record_model.status,
-            _login_record_model.failure_reason,
-        ).order_by(_login_record_model.created_at.desc())
+        login_record_model = self.login_record_model
+        query = login_record_model.query.with_entities(
+            login_record_model.username,
+            login_record_model.ip_address,
+            login_record_model.user_agent,
+            login_record_model.created_at,
+            login_record_model.status,
+            login_record_model.failure_reason,
+        ).order_by(login_record_model.created_at.desc())
 
         if username:
-            query = query.filter(_login_record_model.username.ilike(f"%{username}%"))
+            query = query.filter(login_record_model.username.ilike(f"%{username}%"))
         if ip_address:
-            query = query.filter(_login_record_model.ip_address.ilike(f"%{ip_address}%"))
+            query = query.filter(login_record_model.ip_address.ilike(f"%{ip_address}%"))
         if status:
-            query = query.filter(_login_record_model.status == status.lower())
+            query = query.filter(login_record_model.status == status.lower())
 
         page_result = query.paginate(page=page, page_size=page_size)
         return Resp.OK(LoginRecordItem.from_page(page_result))
@@ -101,7 +92,4 @@ def create_login_record_router(
     Returns:
         APIRouter，包含登录记录查询路由
     """
-    init_login_record_controller(login_record_model)
-    router = APIRouter()
-    router.include_router(LoginRecordController.router)
-    return router
+    return LoginRecordController.create_router(login_record_model=login_record_model)

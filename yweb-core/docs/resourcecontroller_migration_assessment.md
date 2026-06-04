@@ -2,7 +2,7 @@
 
 > 记录将 yweb-core 各模块 API 从「函数式路由工厂」迁移到 `ResourceController` 类视图的范围、决策、难点与影响评估，供后续模块开发/迁移直接对照。
 >
-> 最后更新：2026-06-04
+> 最后更新：2026-06-05
 
 ---
 
@@ -14,13 +14,15 @@
 核心约束（决定一个模块能否干净迁移）：
 
 > `ResourceController` 的 `router` 在**类定义 / import 时**由 `__init_subclass__ → _register_actions()` **一次性构建**。
-> 因此「哪些端点存在」「绑定哪套模型/依赖」必须在 import 时就确定——
-> 任何**运行时（工厂被调用时）才决定**注册与否、绑定哪套模型的写法，都与类视图模型根本冲突。
+> 因此「哪些端点存在」必须在 import 时就确定。
+> 对于「端点集合固定，但 model/service/scheduler 需要在工厂调用时传入」的场景，已通过 `ResourceController.create_router(**attrs)` 生成独立 router 解决。
+> 对于「运行时决定是否注册某些端点」的场景，仍然与当前类视图模型冲突，应保持函数式路由。
 
 **选用判据**：
 
-- ✅ 适合类视图：**无条件全量注册** + **单一/固定依赖**（单例或单模型）+ 方法名能映射路径。
-- ❌ 不适合类视图（保持函数式路由）：**运行时条件注册** / **多套模型并存** / **大量运行时定制回调**。
+- ✅ 适合直接类视图：**无条件全量注册** + **无运行时依赖** + 方法名能映射路径。
+- ✅ 适合类视图工厂：**无条件全量注册** + **运行时绑定固定依赖**（model/service/scheduler）+ 方法名能映射路径。
+- ❌ 不适合类视图（保持函数式路由）：**运行时条件注册** / **大量运行时定制回调** / **协议路径必须严格保持原形**。
 
 ---
 
@@ -31,7 +33,7 @@
 | 文件 | 改动 |
 |------|------|
 | `yweb/controller/decorators.py` | `@get/@post` 支持裸用 + 带参；新增 `@route`；支持 `response_model / status_code / dependencies / summary` 等元数据；新增 `path=` 路径覆盖 |
-| `yweb/controller/base.py` | 读取并应用上述元数据；**同步方法生成同步端点**（FastAPI 自动放线程池，修复同步 ORM 在事件循环触发 async-safety 的问题）；支持 `path=` 覆盖默认 `/方法名` |
+| `yweb/controller/base.py` | 读取并应用上述元数据；**同步方法生成同步端点**（FastAPI 自动放线程池，修复同步 ORM 在事件循环触发 async-safety 的问题）；支持 `path=` 覆盖默认 `/方法名`；新增 `create_router(**attrs)` 用于绑定运行时依赖并生成独立 router |
 
 > `path=` 的引入是为了表达方法名无法表达的路径（如连字符 `/reset-password`）。
 
@@ -43,8 +45,9 @@
 | `yweb/scheduler/api/`（job/stats/execution） | → `JobController` / `StatsController` / `ExecutionController`，保留 `create_*_router` / `setup_scheduler_api` | test_scheduler 全绿，测试零修改 |
 | `yweb/auth/api/user_api.py` | → `UserController`（`/reset-password` 用 `path=` 保留），保留 `create_user_router` | test_auth + test_controller 477 全绿 |
 | `yweb/auth/api/login_record_api.py` | → `LoginRecordController`，保留 `create_login_record_router` | 同上 |
+| `yweb/acl/api/`（rules/resources/permission） | → `AclRuleController` / `AclResourceController` / `AclPermissionController`，保留 `create_acl_router` 并新增子路由工厂 | test_acl + test_controller 全绿 |
 
-实现要点：DTO 从工厂闭包提到模块级；模型/依赖走模块级注入（`init_*_controller`）；`create_*_router` 改为薄装配（注入后 `include_router(XxxController.router)`）；方法保持同步 `def`（配合同步端点修复，DB 走线程池）。
+实现要点：DTO 从工厂闭包提到模块级；运行时模型/依赖通过 `ResourceController.create_router(...)` 绑定到独立 router，避免模块级注入状态；方法保持同步 `def`（配合同步端点修复，DB 走线程池）。
 
 ---
 
@@ -68,21 +71,23 @@
 - **范围**：rbac 5 文件 + auth_api + organization 3 文件；其中 rbac **无测试网**，风险最高；organization/auth 有测试且多处断言「缺模型时路由不存在」，会直接失败。
 - **难度**：中（改代码）+ 高（风险，尤其 rbac）。
 
-### 方案 B：增强 ResourceController 支持「运行时动态建路由」（如 `build(deps=...)`）
-- **影响**：改动框架核心模型（从「类即路由单例」变「按参数生成路由实例」）；可通过兼容桥做到现有模块零感知。
-- **范围**：`controller/base.py` + `decorators.py` + 全套控制器测试回归。
-- **难度**：高（架构级），但**唯一能同时解决三个障碍**，且一次改造覆盖 organization / rbac / auth_api 三个「重」模块。
-- **完整设计见 [§3.1](#31-方案-b-的完整设计blueprint--builddeps动态构建)。**
+### 方案 B：轻量增强 ResourceController 支持「运行时依赖绑定」（已采纳）
+- **影响**：不改变「哪些端点存在由类定义决定」的核心模型，只新增 `Controller.create_router(**attrs)`，为每次工厂调用生成独立 router。
+- **范围**：`controller/base.py` + controller 隔离性测试；auth / scheduler / acl 已按该模式落地。
+- **难度**：低到中。适合解决「路由集合固定，但依赖需要在工厂调用时传入」的问题。
+- **限制**：不能解决「运行时条件注册端点」，例如缺模型时端点根本不存在、按配置开关裁剪 OAuth2/auth 端点等。
 
-### 方案 C（推荐，已采纳）：保持函数式路由
+### 方案 C（推荐，已采纳）：复杂动态模块保持函数式路由
 - **影响**：零。这三类本就属于「特殊 / 可配置 / 多模型」端点，函数式路由是更合适的归属（与 `15_controller_guide.md` 选用建议一致）。
 - **范围 / 难度**：无。
 
 ---
 
-## 3.1 方案 B 的完整设计：Blueprint + `build(deps)`（动态构建）
+## 3.1 未来可选增强：Blueprint + `build(deps)`（动态构建）
 
-方案 B 的具体落地形态。**三个障碍是同一根因的三种表现**：
+本节是后续如果确实要把 organization / rbac / auth_api 这类「运行时条件注册」模块也迁入类视图时的可选设计，不属于当前已采纳规范。
+
+这类模块的三个障碍是同一根因的三种表现：
 
 > `__init_subclass__` 在 **import 时**就把 `cls.router` 一次性建好（`base.py`），导致「注册哪些方法、绑定哪套模型/回调」都必须在 import 时定死。
 
@@ -189,14 +194,14 @@ def create_department_crud_router(dept_model, org_model, employee_model=None, ..
 
 ```
 易 ──────────────────────────────────────────────── 难
-cache < scheduler < auth(user/login_record) < auth_api ≈ rbac < organization
-   ↑————————— 已迁移 —————————↑      ↑————— 保持函数式路由 —————↑
+cache < scheduler < acl < auth(user/login_record) < auth_api ≈ rbac < organization
+   ↑————————————— 已迁移 —————————————↑      ↑————— 保持函数式路由 —————↑
 ```
 
 ---
 
 ## 5. 相关文档
 
-- `15_controller_guide.md` —— ResourceController 用法（已含 `@post/@route`、`response_model/status_code/dependencies`、`path=`、选用建议）。
-- `webapi_development_standards/api_layer_design_guide.md` —— 瘦 API 原则与类视图/函数式选用。
+- `15_controller_guide.md` —— ResourceController 用法（已含 `@post/@route`、`response_model/status_code/dependencies`、`path=`、`create_router(**attrs)`、选用建议）。
+- `webapi_development_standards/api_layer_design_guide.md` —— 瘦 API 原则、运行时依赖绑定规范与类视图/函数式选用。
 - `scheduler_design.md` —— 调度器管理 API（已对齐动词风格真实端点）。

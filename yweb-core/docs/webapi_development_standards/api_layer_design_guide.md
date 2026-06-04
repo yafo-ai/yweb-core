@@ -488,13 +488,57 @@ class DepartmentController(ResourceController):
 
 **禁止**在 controller 方法中写业务逻辑（唯一性校验、状态切换、关联处理等），这些仍然属于 Service/Domain 层。
 
-### 6.3 何时用哪种
+### 6.3 运行时依赖绑定规范
+
+公司内部业务 API 如果使用 `ResourceController`，并且 controller 依赖的 model、service、scheduler 等对象需要在模块初始化或应用装配时传入，必须统一采用 router 工厂绑定：
+
+```python
+from fastapi import APIRouter
+
+from yweb.controller import ResourceController, get
+from yweb.response import Resp, PageResponse
+
+
+class UserController(ResourceController):
+    prefix = ""
+    tags = ["用户管理"]
+    user_model = None
+
+    @get(response_model=PageResponse[UserResponse])
+    def list(self, keyword: str | None = None, page: int = 1, page_size: int = 10):
+        model = self.user_model
+        page_result = model.search(keyword=keyword, page=page, page_size=page_size)
+        return Resp.OK(UserResponse.from_page(page_result))
+
+
+def create_user_router(user_model: type) -> APIRouter:
+    return UserController.create_router(user_model=user_model)
+```
+
+强制要求：
+
+| 规则 | 要求 |
+|------|------|
+| 对外入口 | 暴露 `create_xxx_router(...)`，由应用装配层传入运行时依赖 |
+| 依赖绑定 | 在工厂内调用 `Controller.create_router(name=value)` |
+| 禁止全局注入 | 不允许用 `_xxx_model`、`_scheduler`、`_acl_service` 等模块级变量保存 router 工厂参数 |
+| 禁止 init 注入 | 不允许新增 `init_xxx_controller(...)` 这种修改全局状态的兼容入口 |
+| 显式路径 | controller 必须显式写 `prefix`，没有额外前缀时写 `prefix = ""` |
+| OpenAPI | 每个对外接口必须声明 `response_model`，保证 Swagger 能推导响应结构 |
+| 薄 API | controller 只做参数接收、DTO 转换、服务调用、响应包装，不写业务规则 |
+| 同步 ORM | 直接调用同步 ORM 的接口写同步 `def`，不要在 `async def` 中直接调用同步数据库方法 |
+
+只有完全不需要运行时依赖的静态 controller，才可以直接挂载 `Controller.router` 或使用 `scan_controllers`。
+
+### 6.4 何时用哪种
 
 | 场景 | 推荐 |
 |------|------|
 | 标准 CRUD 资源（用户、部门、订单...） | ResourceController |
 | 需要 `response_model` / `status_code` / 方法级依赖 | ResourceController（`@get`/`@post` 传参） |
+| 路由集合固定，但 model/service/scheduler 运行时传入 | ResourceController + `create_xxx_router(...)` |
 | 特殊协议端点（webhook、OAuth callback） | 函数式路由 |
+| 运行时决定某些端点是否注册 | 函数式路由 |
 | 需要 RESTful 路径参数（`/{id}`）或 PUT/DELETE/PATCH | 函数式路由 |
 | 新项目、统一风格 | ResourceController |
 

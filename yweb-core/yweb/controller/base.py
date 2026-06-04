@@ -62,6 +62,33 @@ class ResourceController:
         cls._register_actions()
 
     @classmethod
+    def create_router(cls, **attrs) -> APIRouter:
+        """创建一份绑定运行时属性的独立 APIRouter。
+
+        用于 model/service/scheduler 等依赖需要在路由工厂中传入的场景，
+        避免把这些依赖存到模块级全局变量。
+        """
+        bound_controller = cls._bind_controller(**attrs)
+        router = APIRouter()
+        router.include_router(bound_controller.router)
+        return router
+
+    @classmethod
+    def _bind_controller(cls, **attrs):
+        controller_attrs = {
+            name: value
+            for name, value in vars(cls).items()
+            if inspect.isfunction(value)
+        }
+        controller_attrs.update({
+            "prefix": cls.prefix,
+            "tags": cls.tags,
+            "dependencies": cls.dependencies,
+            **attrs,
+        })
+        return type(cls.__name__, (cls,), controller_attrs)
+
+    @classmethod
     def _register_actions(cls):
         """扫描类中的方法，注册为路由端点。"""
         for attr_name in list(vars(cls)):

@@ -23,5 +23,6 @@ globs: yweb-core/yweb/**/*.py, **/app/**/*.py
 6. **响应格式**：使用 `Resp.OK()` / `Resp.NotFound()` 等统一响应
 7. **事务管理**：Service 层使用 `@transactional` 装饰器
 8. **async 安全**：ORM 是同步的，`async def` 路由中**禁止**直接调用 ORM；纯 DB 操作用 `def` 路由，混合异步场景用 `await async_db_call(...)`
+9. **ResourceController 运行时依赖**：路由集合固定但 model/service/scheduler 需在装配时传入时，必须使用 `create_xxx_router(...)` + `Controller.create_router(...)`；禁止 `_xxx_model` / `_scheduler` / `_acl_service` 等模块级注入状态和 `init_xxx_controller(...)`
 
 具体规范细节以 `yweb-core/docs/` 下的文档为准，不要凭猜测编码。

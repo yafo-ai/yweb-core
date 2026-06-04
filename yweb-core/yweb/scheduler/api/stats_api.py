@@ -37,15 +37,6 @@ class DashboardResponse(DTO):
     recent_failures: List[dict] = Field(default_factory=list)
 
 
-_scheduler = None
-
-
-def init_stats_controller(scheduler) -> None:
-    """注入 Scheduler 实例（挂载路由前调用）。"""
-    global _scheduler
-    _scheduler = scheduler
-
-
 class StatsController(ResourceController):
     """统计与控制控制器。
 
@@ -58,20 +49,23 @@ class StatsController(ResourceController):
 
     prefix = ""
     tags = ["Scheduler"]
+    scheduler = None
 
     @get(summary="获取调度器统计")
     def stats(self):
         """获取调度器整体统计信息"""
-        stats = _scheduler.get_stats()
+        scheduler = self.scheduler
+        stats = scheduler.get_stats()
         return Resp.OK(data=StatsResponse.from_dict(stats))
 
     @get(summary="获取仪表板数据")
     def dashboard(self):
         """获取仪表板概览数据"""
         default_data = DashboardResponse()
+        scheduler = self.scheduler
 
         try:
-            history_manager = _scheduler._get_history_manager()
+            history_manager = scheduler._get_history_manager()
             if history_manager is None:
                 return Resp.OK(data=default_data)
         except AttributeError:
@@ -83,8 +77,9 @@ class StatsController(ResourceController):
     @post(summary="清理过期历史")
     def cleanup(self, days: Optional[int] = Query(None, description="保留天数")):
         """清理过期的历史记录和统计数据"""
+        scheduler = self.scheduler
         try:
-            history_manager = _scheduler._get_history_manager()
+            history_manager = scheduler._get_history_manager()
             if history_manager is None:
                 return Resp.OK(
                     data={"history": 0, "stats": 0},
@@ -105,12 +100,13 @@ class StatsController(ResourceController):
     @get(summary="获取调度器状态")
     def status(self):
         """获取调度器运行状态"""
+        scheduler = self.scheduler
         return Resp.OK(data={
-            "is_running": _scheduler._running,
-            "enabled": _scheduler.settings.enabled,
-            "store": _scheduler.settings.store,
-            "timezone": _scheduler.settings.timezone,
-            "total_jobs": len(_scheduler._jobs),
+            "is_running": scheduler._running,
+            "enabled": scheduler.settings.enabled,
+            "store": scheduler.settings.store,
+            "timezone": scheduler.settings.timezone,
+            "total_jobs": len(scheduler._jobs),
         })
 
 
@@ -123,7 +119,4 @@ def create_stats_router(scheduler) -> APIRouter:
     Returns:
         APIRouter
     """
-    init_stats_controller(scheduler)
-    router = APIRouter()
-    router.include_router(StatsController.router)
-    return router
+    return StatsController.create_router(scheduler=scheduler)

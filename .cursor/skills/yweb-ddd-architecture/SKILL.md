@@ -102,6 +102,37 @@ class UserController(ResourceController):
 - 默认 POST，`@get` 标记 GET
 - `_` 开头方法为私有辅助，不注册路由
 - `dependencies` 类属性注入 Router 级依赖
+- 每个 controller 必须显式声明 `prefix`；没有额外前缀时写 `prefix = ""`
+
+### ResourceController 运行时依赖绑定（强制）
+
+如果 controller 的 model、service、scheduler 等依赖需要在应用装配或 `create_xxx_router(...)` 调用时传入，必须使用 `Controller.create_router(...)` 生成独立 router：
+
+```python
+from fastapi import APIRouter
+from yweb.controller import ResourceController, get
+
+class UserController(ResourceController):
+    prefix = ""
+    tags = ["用户"]
+    user_model = None
+
+    @get(response_model=PageResponse[UserDTO])
+    def list(self, page: int = 1, page_size: int = 10):
+        model = self.user_model
+        return Resp.OK(UserDTO.from_page(model.query.paginate(page=page, page_size=page_size)))
+
+
+def create_user_router(user_model: type) -> APIRouter:
+    return UserController.create_router(user_model=user_model)
+```
+
+强制规则：
+
+- 禁止使用 `_xxx_model`、`_scheduler`、`_acl_service` 等模块级变量保存 router 工厂参数
+- 禁止新增 `init_xxx_controller(...)` 这类修改全局状态或类变量的注入函数
+- 使用运行时依赖的 controller 不直接挂载 `Controller.router`，也不纳入 `scan_controllers`
+- 运行时决定端点是否注册、协议路径必须严格保持原形、或包含大量动态回调的模块，继续使用函数式路由
 
 ### 函数式路由
 

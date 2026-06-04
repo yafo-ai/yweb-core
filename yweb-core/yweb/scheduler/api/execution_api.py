@@ -34,17 +34,6 @@ class ExecutionResponse(DTO):
 ExecutionPageResponse = PageResponse[ExecutionResponse]
 
 
-_scheduler = None
-_history_model = None
-
-
-def init_execution_controller(scheduler, history_model: Type = None) -> None:
-    """注入 Scheduler 实例与历史模型（挂载路由前调用）。"""
-    global _scheduler, _history_model
-    _scheduler = scheduler
-    _history_model = history_model
-
-
 class ExecutionController(ResourceController):
     """执行历史控制器。
 
@@ -55,6 +44,8 @@ class ExecutionController(ResourceController):
 
     prefix = "/executions"
     tags = ["Scheduler"]
+    scheduler = None
+    history_model = None
 
     @get(response_model=ExecutionPageResponse, summary="查询执行历史")
     def list(
@@ -67,12 +58,15 @@ class ExecutionController(ResourceController):
         page_size: int = Query(20, ge=1, le=100, description="每页数量"),
     ):
         """查询任务执行历史记录"""
-        if _history_model is None:
+        scheduler = self.scheduler
+        history_model = self.history_model
+
+        if history_model is None:
             empty_page = Page(rows=[], total_records=0, page=page, page_size=page_size, total_pages=0)
             return Resp.OK(data=ExecutionResponse.from_page(empty_page))
 
         try:
-            history_manager = _scheduler._get_history_manager()
+            history_manager = scheduler._get_history_manager()
             if history_manager is None:
                 empty_page = Page(rows=[], total_records=0, page=page, page_size=page_size, total_pages=0)
                 return Resp.OK(data=ExecutionResponse.from_page(empty_page))
@@ -81,7 +75,7 @@ class ExecutionController(ResourceController):
             return Resp.OK(data=ExecutionResponse.from_page(empty_page))
 
         try:
-            HistoryModel = _history_model
+            HistoryModel = history_model
             query = HistoryModel.query
 
             if job_code:
@@ -107,14 +101,15 @@ class ExecutionController(ResourceController):
     @get(summary="获取执行详情")
     def get(self, run_id: str = Query(..., description="执行记录 ID")):
         """获取单次执行的详细信息"""
+        scheduler = self.scheduler
         try:
-            history_manager = _scheduler._get_history_manager()
+            history_manager = scheduler._get_history_manager()
             if history_manager is None:
                 return Resp.NotFound(message=f"执行记录 {run_id} 不存在（历史记录未启用）")
         except AttributeError:
             return Resp.NotFound(message=f"执行记录 {run_id} 不存在（历史记录未启用）")
 
-        execution = _scheduler.get_execution(run_id)
+        execution = scheduler.get_execution(run_id)
         if not execution:
             return Resp.NotFound(message=f"执行记录 {run_id} 不存在")
         return Resp.OK(data=ExecutionResponse.from_entity(execution))
@@ -130,7 +125,7 @@ def create_execution_router(scheduler, history_model: Type = None) -> APIRouter:
     Returns:
         APIRouter
     """
-    init_execution_controller(scheduler, history_model)
-    router = APIRouter()
-    router.include_router(ExecutionController.router)
-    return router
+    return ExecutionController.create_router(
+        scheduler=scheduler,
+        history_model=history_model,
+    )

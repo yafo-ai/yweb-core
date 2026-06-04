@@ -29,6 +29,7 @@ YWeb 是基于 **FastAPI + SQLAlchemy** 的 Python Web 框架，核心特点：
 7. **请求模型**：使用 Pydantic `BaseModel`（不是 DTO）
 8. **缓存**：使用 `@cached` 装饰器，注意 TTL 设置和失效策略
 9. **事务管理**：Service 层负责事务边界，使用 `@transactional` 装饰器
+10. **运行时依赖绑定**：`ResourceController` 需要运行时 model/service/scheduler 时，统一通过 `create_xxx_router(...)` 调 `Controller.create_router(...)`；禁止模块级注入变量和 `init_xxx_controller(...)`
 
 ## 规范文档索引
 
@@ -66,7 +67,7 @@ YWeb 是基于 **FastAPI + SQLAlchemy** 的 Python Web 框架，核心特点：
 
 | 主题 | 文档路径 | 说明 |
 |------|---------|------|
-| ResourceController 类视图 | `yweb-core/docs/15_controller_guide.md` | 类视图基类、@get、路径组合、依赖注入、scan_controllers |
+| ResourceController 类视图 | `yweb-core/docs/15_controller_guide.md` | 类视图基类、@get、路径组合、依赖注入、运行时依赖绑定、scan_controllers |
 
 ### 基础设施
 

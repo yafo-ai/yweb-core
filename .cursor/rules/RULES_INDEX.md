@@ -15,9 +15,9 @@
 ## 后端（YWeb / Python）
 
 - `yweb-framework.mdc`
-  - yweb 框架总规范入口；提供 DDD、异常、事务、响应等总览。
+  - yweb 框架总规范入口；提供 DDD、ResourceController 运行时依赖绑定、异常、事务、响应等总览。
 - `yweb-ddd-architecture.mdc`
-  - DDD 分层职责边界（API/Service/Domain）；瘦 API 原则。
+  - DDD 分层职责边界（API/Service/Domain）；瘦 API 原则；ResourceController 强制写法。
 - `yweb-orm.mdc`
   - ORM 模型定义、字段 comment、SQLAlchemy 2.0 风格、事务边界。
 - `yweb-auth.mdc`
@@ -27,7 +27,7 @@
 - `yweb-testing.mdc`
   - 测试编写与组织规范。
 - `yweb-webapi-response.mdc`（新增）
-  - WebAPI 响应规范：必须声明 `response_model`，DTO/Resp 统一写法，避免 `/docs` 出现 `string`。
+  - WebAPI 响应规范：必须声明 `response_model`，DTO/Resp 统一写法，ResourceController 也必须通过装饰器声明响应模型，避免 `/docs` 出现 `string`。
 - `yweb-agent-command.mdc`（新增）
   - Agent 指令系统规范：指令 DSL（函数式 `role()`/`agent()`/`@artifact()`）、解析/分发/Handler/提示词；引擎无关、超集兼容。
 
