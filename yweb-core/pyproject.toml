@@ -73,9 +73,6 @@ redis = ["redis>=4.5.0"]
 # 限流支持
 ratelimit = ["slowapi>=0.1.9"]
 
-# Agent 指令系统：修复 LLM 输出的畸形 JSON（缺失时降级为不修复）
-agentcmd = ["json-repair>=0.29.0"]
-
 # 文件验证增强（magic number 检测、图片尺寸验证）
 validation = [
     "python-magic>=0.4.27",
@@ -119,7 +116,6 @@ all = [
     "python-magic>=0.4.27",
     "pillow>=10.0.0",
     "slowapi>=0.1.9",
-    "json-repair>=0.29.0",
 ]
 
 [project.urls]

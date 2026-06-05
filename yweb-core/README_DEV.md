@@ -187,7 +187,7 @@ yweb-core/
 │   ├── auth/                 # 认证（JWT 双 Token、setup_auth 一键启用）
 │   ├── permission/           # 权限（RBAC、角色继承）
 │   ├── organization/         # 组织管理（setup_organization 一键启用）
-│   ├── agent/                # Agent 指令系统（LLM 指令解析/分发、内置 Handler、提示词生成）
+│   ├── agent/                # Agent 指令系统（解析、构建、格式说明生成）
 │   ├── cache/                # 缓存（@cached 装饰器、自动失效）
 │   ├── scheduler/            # 定时任务（Cron / Interval / Once、Builder 模式）
 │   ├── response/             # 统一响应（Resp 快捷类、DTO）
@@ -200,7 +200,7 @@ yweb-core/
 │   └── utils/                # 工具（加密、文件大小解析）
 ├── docs/                     # 文档
 ├── tests/                    # 测试
-│   ├── test_agent/           # Agent 指令系统测试（解析/DSL/分发/Handler/提示词/回归）
+│   ├── test_agent/           # Agent 指令系统测试（解析/DSL/构建/格式说明）
 │   ├── test_auth/            # 认证模块测试
 │   ├── test_cache/           # 缓存模块测试
 │   ├── test_config/          # 配置模块测试

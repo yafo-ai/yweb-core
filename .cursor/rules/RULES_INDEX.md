@@ -29,7 +29,7 @@
 - `yweb-webapi-response.mdc`（新增）
   - WebAPI 响应规范：必须声明 `response_model`，DTO/Resp 统一写法，ResourceController 也必须通过装饰器声明响应模型，避免 `/docs` 出现 `string`。
 - `yweb-agent-command.mdc`（新增）
-  - Agent 指令系统规范：指令 DSL（函数式 `role()`/`agent()`/`@artifact()`）、解析/分发/Handler/提示词；引擎无关、超集兼容。
+  - Agent 指令系统规范：指令 DSL（函数式 `item()`/`record()`/`@artifact()`）、解析/构建/格式说明生成。
 
 ## 前端（Vue / API 封装）
 

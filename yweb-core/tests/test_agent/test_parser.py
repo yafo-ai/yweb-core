@@ -11,7 +11,6 @@ from yweb.agent.parser import (
     parse_param_string,
     split_param_expressions,
 )
-from yweb.agent.parser import parser as parser_module
 
 
 class TestSplitParamExpressions:
@@ -83,21 +82,6 @@ class TestParseParamString:
         """测试 key=value 参数解析为字典（各类型/中文/非法键跳过等场景）"""
         assert parse_param_string(text) == expected
 
-    def test_p12_json_repair_degradation(self):
-        """P-12：json_repair 降级。
-
-        畸形 JSON（缺少闭合）：
-            - 已安装 json_repair → 修复为列表；
-            - 未安装（当前环境）→ 降级保留为字符串，不报错。
-        """
-        malformed = "roles='[{\"role\":\"客服\"'"
-        result = parse_param_string(malformed)
-        assert "roles" in result
-        if parser_module.repair_json is None:
-            assert isinstance(result["roles"], str)
-        else:
-            assert isinstance(result["roles"], list)
-
 
 class TestCallValueParsing:
     """函数式内部对象 name(...) → CallValue 解析测试"""
@@ -113,6 +97,14 @@ class TestCallValueParsing:
         assert result == {
             "agent": CallValue("agent", {"name": "商品参数客服", "task": "提供加墨步骤"})
         }
+
+    def test_cv07_space_separated_args_not_supported(self):
+        """同行空格不作为参数分隔符，第二个参数会被吞进第一个值"""
+        result = parse_param_string('x=role(name="A" message="B")')
+        role = result["x"]
+        assert isinstance(role, CallValue)
+        assert role.args.get("name") == 'A" message="B'
+        assert "message" not in role.args
 
     def test_cv03_mixed_arg_types(self):
         """测试函数参数含数字与布尔值"""

@@ -582,52 +582,58 @@ class CreateUserRequest(BaseModel):
     age: Range(18, 120)                     # 范围 18-120
 ```
 
-### Agent 指令系统 —— 解析 LLM 文本指令，分发到 Handler
+### Agent 指令系统 —— 解析、构建与格式说明
 
-LLM 与工作流引擎之间的通信协议：从模型文本输出中解析结构化指令，按类型分发到 Handler 执行。
-**不绑定任何工作流/图/LLM 实现**，通过 `CommandContext` 协议桥接到你自己的业务对象。
+提供三项能力：
+
+1. **解析（parser）**：`command` 文本 → `ParsedCommand`（工具名 + 参数）；
+2. **构建（builder）**：结构化参数 → `command=|<|...|>|` 文本（`parse` 的逆操作）；
+3. **格式说明（prompt）**：工具描述 → 指令格式说明文本（供 LLM 提示词拼接）。
 
 ```python
-from yweb import (
-    CommandDispatcher, WILDCARD_HANDLER_NAME, parse_command_output,
-    AssignmentHandler, WriteVarHandler, NotifyHandler,
-    SendMessageHandler, TerminateHandler, CustomFunctionHandler,
-)
+from yweb import build_command, CallValue, parse_command_output, CommandPromptBuilder
 
-# 1) 注册内置 Handler（assignment / write_var / notify / send_message / terminate + 通配自定义函数）
-dispatcher = CommandDispatcher()
-dispatcher.register_many({
-    "assignment": AssignmentHandler(),
-    "write_var": WriteVarHandler(),
-    "notify": NotifyHandler(),
-    "send_message": SendMessageHandler(),
-    "terminate": TerminateHandler(),
-    WILDCARD_HANDLER_NAME: CustomFunctionHandler(),
-})
-
-# 2) 从 LLM 文本提取指令 → 并发分发执行（顺序保持一致）
+# 1) 文本 → 结构化
 commands = parse_command_output(llm_output_text)   # List[ParsedCommand]
-results = dispatcher.dispatch(commands, my_context)  # List[CommandResult]
+for cmd in commands:
+    process(cmd.toolname, cmd.args)
+
+# 2) 结构化 → command 文本（嵌套对象用 CallValue）
+dsl = build_command("invoke", items=[
+    CallValue("item", {"name": "A", "text": "..."}),
+])
+
+# 3) 生成格式说明，供提示词拼接
+prompt = CommandPromptBuilder.function_prompt(
+    func_name="rag_search",
+    description="知识库检索工具",
+    command_example='rag_search(querys=["问题"])',
+)
 ```
 
 **函数式指令 DSL** —— 一套语法（函数用 `()`、数组用 `[]`），比 JSON 对象更利于小模型稳定生成：
 
 ```text
-command=|<|assignment(
-    next_roles=[
-        role(name="商品参数客服" message="提供加墨步骤")
-        agent(name="商品故障客服" task="排查加墨故障")
+command=|<|invoke(
+    items=[
+        item(
+            name="A"
+            text="提供操作步骤"
+        )
+        record(
+            id="B"
+            value="排查异常"
+        )
     ]
 )|>|
 
-command=|<|run_sql(script=@artifact("sql/query.sql"))|>|   # @artifact 引用外部资源，不内联长文本
+command=|<|run_script(script=@artifact("scripts/query.sql"))|>|   # @artifact 引用外部资源，不内联长文本
 ```
 
-- 内部对象统一为函数调用 `role(...)` / `agent(...)` → `CallValue`，参数兼容**换行与逗号**分隔
+- 嵌套对象统一为函数调用 `item(...)` / `record(...)` → `CallValue`，参数用**换行或逗号**分隔（同行空格不切分）
 - `@artifact("path")` → `ArtifactRef`（只产生引用标记，不读取文件）
-- 向后兼容旧 JSON 字面量形态（如 `[{"role":...}]`），是 y-agent 解析的**超集**
+- 其余值按字面量解析（字符串/数字/列表/字典）
 
-> 解析畸形 JSON 需可选依赖：`pip install "yweb[agentcmd]"`（缺失时自动降级为不修复，模块仍可用）。
 > 详细规范见 AI 编程 Skill：`.cursor/skills/yweb-agent-command/SKILL.md`。
 
 ---
@@ -731,7 +737,7 @@ yweb-core/
 │   ├── auth/                 # 认证（JWT 双 Token、setup_auth 一键启用）
 │   ├── rbac/                 # 权限（RBAC、角色继承）
 │   ├── organization/         # 组织管理（setup_organization 一键启用）
-│   ├── agent/                # Agent 指令系统（LLM 指令解析/分发、内置 Handler、提示词生成）
+│   ├── agent/                # Agent 指令系统（解析、构建、格式说明生成）
 │   ├── cache/                # 缓存（@cached 装饰器、自动失效）
 │   ├── scheduler/            # 定时任务（Cron / Interval / Once、Builder 模式）
 │   ├── response/             # 统一响应（Resp 快捷类、DTO）

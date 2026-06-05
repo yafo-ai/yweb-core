@@ -1,19 +1,17 @@
-"""DSL 超集端到端测试
+"""DSL 端到端测试
 
-覆盖 yweb-core 相对 y-agent 新增的函数式 DSL 能力（仅 yweb-core 生效）：
+覆盖函数式 DSL 解析能力：
 
 - 命令提取的**括号平衡扫描**（支持嵌套函数调用、引号内 ``)|>`` 不误判）；
 - 函数式内部对象 ``role(...)`` / ``agent(...)`` → ``CallValue``；
 - 参数分隔符兼容换行与逗号；
-- ``@artifact(...)`` → ``ArtifactRef``，含数组场景；
-- ``AssignmentHandler`` 对新 DSL 形态与旧 dict 形态的超集兼容。
+- ``@artifact(...)`` → ``ArtifactRef``，含数组场景。
 
 断言基于 DSL 规格（而非解析器实现细节），并对每个核心行为包含失败/边界反例。
 """
 
 from yweb.agent import (
     ArtifactRef,
-    AssignmentHandler,
     CallValue,
     parse_command_output,
 )
@@ -141,59 +139,9 @@ class TestDSLArrayMixed:
         cmd = parse_command_output("<|custom(tags=[1, 2, 3])|>")[0]
         assert cmd.args["tags"] == [1, 2, 3]
 
-    def test_legacy_dict_array_unchanged(self):
-        """旧 JSON 对象数组仍解析为 dict 列表（向后兼容，关键反例）"""
+    def test_dict_array_parsed_as_dicts(self):
+        """JSON 对象数组解析为 dict 列表（合法字面量，关键反例）"""
         cmd = parse_command_output(
             '<|assignment(next_roles=[{"role": "A", "message": "m"}])|>'
         )[0]
         assert cmd.args["next_roles"] == [{"role": "A", "message": "m"}]
-
-
-class TestDSLAssignmentHandler:
-    """AssignmentHandler 对新 DSL 形态的超集兼容（端到端：提取 → 处理）"""
-
-    def _handle(self, text, context):
-        """辅助：提取首条命令并交给 AssignmentHandler 处理。"""
-        cmd = parse_command_output(text)[0]
-        return AssignmentHandler().handle(cmd, context)
-
-    def test_role_call_form(self, context):
-        """role(name=, message=) 形态：发送消息并返回角色"""
-        r = self._handle(
-            '<|assignment(next_roles=[role(name="客服", message="你好")])|>',
-            context,
-        )
-        assert r.success is True
-        assert r.target_roles == ["客服"]
-        assert context.messages == [("test_role", "客服", "你好")]
-
-    def test_agent_call_form_uses_task(self, context):
-        """agent(name=, task=) 形态：task 作为消息内容"""
-        r = self._handle(
-            '<|assignment(next_roles=[agent(name="客服", task="处理加墨")])|>',
-            context,
-        )
-        assert r.success is True
-        assert context.messages == [("test_role", "客服", "处理加墨")]
-
-    def test_mixed_dict_and_call_forms(self, context):
-        """同一 next_roles 中 dict 与 CallValue 混排均被处理"""
-        text = (
-            '<|assignment(next_roles=['
-            '{"role": "A", "message": "ma"}, '
-            'role(name="B", message="mb")'
-            '])|>'
-        )
-        r = self._handle(text, context)
-        assert r.success is True
-        assert sorted(r.target_roles) == ["A", "B"]
-        assert ("test_role", "A", "ma") in context.messages
-        assert ("test_role", "B", "mb") in context.messages
-
-    def test_call_missing_name_fails(self, context):
-        """CallValue 缺少角色名（name/role）时返回 success=False（关键反例）"""
-        r = self._handle(
-            '<|assignment(next_roles=[role(message="no name")])|>',
-            context,
-        )
-        assert r.success is False

@@ -2,13 +2,12 @@
 
 从 LLM 文本输出中提取 ``|<|func_name(args)|>|`` 格式的结构化指令。
 
-在 y-agent 解析算法基础上扩展为**超集** DSL（仅 yweb-core）：
+采用函数式 DSL：
 
-1. ``parse_command_output`` 返回 ``List[ParsedCommand]``（而非 ``List[dict]``）。
-2. ``json_repair`` 改为可选依赖：未安装时跳过畸形 JSON 修复，其余逻辑不变。
-   （安装 ``json-repair`` 后旧字面量行为与 y-agent 完全一致。）
-3. 内部对象支持函数调用式 ``role(name=..., message=...)`` → ``CallValue``；
-   非函数式的值（字符串/数字/列表/字典字面量）仍走原字面量路径。
+1. ``parse_command_output`` 返回 ``List[ParsedCommand]``。
+2. 内部对象用函数调用式 ``item(name=..., text=...)`` → ``CallValue``；
+   外部资源用 ``@artifact(...)`` → ``ArtifactRef``；
+   其余值（字符串/数字/列表/字典）按字面量解析。
 """
 
 import ast
@@ -16,11 +15,6 @@ import re
 from typing import Any, Dict, List, Optional
 
 from ..types import ArtifactRef, CallValue, ParsedCommand
-
-try:
-    from json_repair import repair_json
-except ImportError:  # 降级：缺少 json-repair 时不修复畸形 JSON
-    repair_json = None
 
 
 def split_param_expressions(s: str) -> List[str]:
@@ -171,36 +165,23 @@ def _try_parse_call(value_str: str) -> Optional[CallValue]:
 
 
 def _parse_literal(value_str: str) -> Any:
-    """解析字面量值（引号字符串 / JSON 列表字典 / 数字 / 布尔）。
+    """解析字面量值（引号字符串 / 列表 / 字典 / 数字 / 布尔）。
 
-    保留 y-agent 原始算法：``ast.literal_eval`` + 可选 ``json_repair`` 修复畸形 JSON，
-    失败时降级为去引号或原始字符串。
+    使用 ``ast.literal_eval`` 安全解析；失败时降级为去引号或保留原始字符串。
+    不做畸形 JSON 修复（不引入外部依赖）。
     """
     # 处理引号包裹的字符串
     if (value_str.startswith('"') and value_str.endswith('"')) or (
         value_str.startswith("'") and value_str.endswith("'")
     ):
         try:
-            if value_str.index("[{") < 3 or value_str.index("{") < 3:
-                if repair_json is not None:
-                    repair_value_str = repair_json(value_str, ensure_ascii=False)  # 修复操作
-                    if repair_value_str and repair_value_str != '""':
-                        value_str = str(repair_value_str)
-            # 使用 literal_eval 安全解析
             return ast.literal_eval(value_str)
         except (SyntaxError, ValueError):
             # 解析失败时移除外层引号
             return value_str[1:-1]
 
-    # 尝试解析其他类型
+    # 尝试解析其他类型（数字 / 布尔 / 列表 / 字典）
     try:
-        if value_str.startswith("[") or value_str.startswith("{"):
-            if value_str.startswith("[{") and not value_str.endswith("]"):
-                value_str += "]"
-            if repair_json is not None:
-                repair_value_str = repair_json(value_str, ensure_ascii=False)  # 修复操作
-                if repair_value_str and repair_value_str != '""':
-                    value_str = str(repair_value_str)
         return ast.literal_eval(value_str)
     except (SyntaxError, ValueError):
         # 无法解析时保留原始字符串
@@ -326,7 +307,7 @@ def parse_command_output(output: str) -> List[ParsedCommand]:
 
     识别 ``|<| func_name(args) |>|`` 格式。采用**括号平衡扫描**（替代非贪婪正则）：
     定位 ``func_name(`` 后，用引号/转义感知的方式找到与之匹配的 ``)``，再要求其后为
-    ``|>``。因此支持嵌套函数调用，如 ``|<|assignment(next_roles=[role(name="x")])|>|``。
+    ``|>``。因此支持嵌套函数调用，如 ``|<|invoke(items=[item(name="x")])|>|``。
 
     Args:
         output: LLM 的原始文本输出。
