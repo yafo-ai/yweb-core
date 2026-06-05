@@ -2,7 +2,7 @@
 
 import pytest
 
-from yweb.agent import (
+from yweb.agent.command import (
     ArtifactRef,
     CallValue,
     build_command,
@@ -14,6 +14,7 @@ class TestBuildCommand:
     """结构化参数 → command 文本"""
 
     def test_literal_params_round_trip(self):
+        """测试字面量参数构建后可被解析还原"""
         text = build_command("notify", receiver="human", message="你好")
         cmds = parse_command_output(text)
         assert len(cmds) == 1
@@ -21,6 +22,7 @@ class TestBuildCommand:
         assert cmds[0].args == {"receiver": "human", "message": "你好"}
 
     def test_call_value_round_trip(self):
+        """测试 CallValue 列表构建后可被解析还原"""
         text = build_command(
             "assignment",
             next_roles=[
@@ -36,11 +38,13 @@ class TestBuildCommand:
         ]
 
     def test_artifact_round_trip(self):
+        """测试 ArtifactRef 构建后可被解析还原"""
         text = build_command("run_sql", script=ArtifactRef("sql/query.sql"))
         cmds = parse_command_output(text)
         assert cmds[0].args["script"] == ArtifactRef(path="sql/query.sql")
 
     def test_empty_list_and_bool(self):
+        """测试空列表与布尔值构建后可被解析还原"""
         text = build_command("write_var", tags=[], enabled=True)
         cmds = parse_command_output(text)
         assert cmds[0].args == {"tags": [], "enabled": True}
@@ -53,6 +57,7 @@ class TestBuildCommand:
         assert cmds[0].args["meta"] == {"k": "v"}
 
     def test_unsupported_type_raises(self):
+        """测试不支持的参数类型会抛出 TypeError"""
         with pytest.raises(TypeError, match="不支持的 DSL 值类型"):
             build_command("x", data=object())
 
@@ -61,6 +66,7 @@ class TestBuildCommandEnvelope:
     """输出包络格式"""
 
     def test_wraps_with_command_envelope(self):
+        """测试构建结果包含 command 包络"""
         text = build_command("search", q="hi")
         assert text.startswith("command=|<|")
         assert text.endswith("|>|")

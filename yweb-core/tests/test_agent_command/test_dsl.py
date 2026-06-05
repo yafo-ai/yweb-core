@@ -10,7 +10,7 @@
 断言基于 DSL 规格（而非解析器实现细节），并对每个核心行为包含失败/边界反例。
 """
 
-from yweb.agent import (
+from yweb.agent.command import (
     ArtifactRef,
     CallValue,
     parse_command_output,

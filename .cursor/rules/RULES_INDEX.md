@@ -29,7 +29,7 @@
 - `yweb-webapi-response.mdc`（新增）
   - WebAPI 响应规范：必须声明 `response_model`，DTO/Resp 统一写法，ResourceController 也必须通过装饰器声明响应模型，避免 `/docs` 出现 `string`。
 - `yweb-agent-command.mdc`（新增）
-  - Agent 指令系统规范：指令 DSL（函数式 `item()`/`record()`/`@artifact()`）、解析/构建/格式说明生成。
+  - Agent 内部工具调用协议规范：指令 DSL（函数式 `item()`/`record()`/`@artifact()`）、解析/构建/格式说明生成。
 
 ## 前端（Vue / API 封装）
 
@@ -48,7 +48,7 @@
    - API 路由：`yweb-ddd-architecture.mdc` + `yweb-webapi-response.mdc`
    - ORM 模型：`yweb-orm.mdc`
    - 前端 API：`frontend-api-conventions.mdc`
-   - Agent 指令系统：`yweb-agent-command.mdc`
+   - Agent 内部工具调用协议：`yweb-agent-command.mdc`
 3. 涉及测试时补看 `yweb-testing.mdc` 与 pytest 命名规则。
 
 ## 维护约定

@@ -2,20 +2,20 @@
 
 pytest 默认捕获 print，通过时看不到输出。要看打印请用::
 
-    python -m pytest tests/test_agent/test_assignment.py -s
+    python -m pytest tests/test_agent_command/test_assignment.py -s
 
 或直接运行本文件::
 
-    python tests/test_agent/test_assignment.py
+    python tests/test_agent_command/test_assignment.py
 """
 
 import sys
 from pathlib import Path
 
-# 允许 python tests/test_agent/test_assignment.py 直接运行
+# 允许 python tests/test_agent_command/test_assignment.py 直接运行
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from yweb.agent import CallValue, parse_command_output
+from yweb.agent.command import CallValue, parse_command_output
 
 LLM_OUTPUT = """command=|<|assignment(
 next_roles=[
@@ -32,6 +32,7 @@ message="确认加墨过程可能的故障并给出解决方案"
 
 
 def test_parse_assignment_with_roles():
+    """测试 assignment 指令中的 role(...) 列表可被解析为 CallValue"""
     cmds = parse_command_output(LLM_OUTPUT)
     assert len(cmds) == 1
     assert cmds[0].toolname == "assignment"

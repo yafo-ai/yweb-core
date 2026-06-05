@@ -57,7 +57,7 @@ def build_command(toolname: str, **params: Any) -> str:
         >>> build_command("notify", receiver="human", message="你好")
         'command=|<|notify(\\nreceiver="human"\\nmessage="你好"\\n)|>|'
 
-        >>> from yweb.agent import CallValue
+        >>> from yweb.agent.command import CallValue
         >>> build_command("invoke", items=[
         ...     CallValue("item", {"name": "A", "text": "..."}),
         ... ])

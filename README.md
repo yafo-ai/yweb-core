@@ -582,7 +582,7 @@ class CreateUserRequest(BaseModel):
     age: Range(18, 120)                     # 范围 18-120
 ```
 
-### Agent 指令系统 —— 解析、构建与格式说明
+### Agent 内部工具调用协议 —— 解析、构建与格式说明
 
 提供三项能力：
 
@@ -591,7 +591,7 @@ class CreateUserRequest(BaseModel):
 3. **格式说明（prompt）**：工具描述 → 指令格式说明文本（供 LLM 提示词拼接）。
 
 ```python
-from yweb import build_command, CallValue, parse_command_output, CommandPromptBuilder
+from yweb.agent.command import build_command, CallValue, parse_command_output, CommandPromptBuilder
 
 # 1) 文本 → 结构化
 commands = parse_command_output(llm_output_text)   # List[ParsedCommand]
@@ -737,7 +737,7 @@ yweb-core/
 │   ├── auth/                 # 认证（JWT 双 Token、setup_auth 一键启用）
 │   ├── rbac/                 # 权限（RBAC、角色继承）
 │   ├── organization/         # 组织管理（setup_organization 一键启用）
-│   ├── agent/                # Agent 指令系统（解析、构建、格式说明生成）
+│   ├── agent/                # Agent 相关基础能力（command 协议子模块）
 │   ├── cache/                # 缓存（@cached 装饰器、自动失效）
 │   ├── scheduler/            # 定时任务（Cron / Interval / Once、Builder 模式）
 │   ├── response/             # 统一响应（Resp 快捷类、DTO）

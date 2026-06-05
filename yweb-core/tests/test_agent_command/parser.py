@@ -3,7 +3,7 @@
 用法（yweb-core 目录下）::
 
     $env:LLM_API_KEY="sk-..."
-    python tests/test_agent/parser.py
+    python tests/test_agent_command/parser.py
 
 测试场景：assignment + next_roles + role(...)（禁止 JSON 对象数组）。
 """
@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from yweb.agent import CallValue, CommandPromptBuilder, parse_command_output
+from yweb.agent.command import CallValue, CommandPromptBuilder, parse_command_output
 
 name = os.environ.get("LLM_MODEL_NAME", "deepseek-v4-pro")
 url = os.environ.get("LLM_API_BASE", "https://api.deepseek.com/v1").rstrip("/")
@@ -75,6 +75,7 @@ USER_PROMPT = f"""用户问题：
 
 
 def call_llm() -> str:
+    """调用外部 LLM，返回原始输出文本。"""
     if not key.strip():
         raise SystemExit("请设置环境变量 LLM_API_KEY")
 
@@ -101,6 +102,7 @@ def call_llm() -> str:
 
 
 def main() -> None:
+    """执行闭环检查并打印解析结果。"""
     print(f"model: {name}\nurl:   {url}\n")
     print("=== 期望形态（函数式 assignment）===")
     print(f"command=|<|{_ASSIGNMENT_INNER}|>|")

@@ -3,7 +3,7 @@
 覆盖 CommandPromptBuilder 通用工具指令格式拼接。
 """
 
-from yweb.agent import CommandPromptBuilder
+from yweb.agent.command import CommandPromptBuilder
 
 
 class TestFunctionPrompt:

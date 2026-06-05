@@ -256,22 +256,6 @@ from .cache import (
     CacheStats,
 )
 
-# 导出 Agent 指令模块（解析 + 构建 + 格式说明生成）
-from .agent import (
-    # 数据模型
-    ParsedCommand,
-    CallValue,
-    ArtifactRef,
-    # 解析函数
-    parse_command_output,
-    parse_param_string,
-    split_param_expressions,
-    # 构建函数（parse 的逆操作）
-    build_command,
-    # 提示词生成
-    CommandPromptBuilder,
-)
-
 __all__ = [
     # 版本信息
     "__version__",
@@ -479,13 +463,4 @@ __all__ = [
     "MemoryBackend",                # 内存后端
     "RedisBackend",                 # Redis 后端
     "CacheStats",                   # 缓存统计
-    # Agent - 指令系统（解析 + 构建 + 格式说明生成）
-    "ParsedCommand",                # 解析后的指令
-    "CallValue",                    # 函数式内部对象
-    "ArtifactRef",                  # 工件引用（@artifact）
-    "parse_command_output",         # 从文本提取指令
-    "parse_param_string",           # 解析参数字符串
-    "split_param_expressions",      # 分割参数表达式
-    "build_command",                # 结构化 → command 文本（parse 逆操作）
-    "CommandPromptBuilder",         # 指令格式提示词生成
 ]

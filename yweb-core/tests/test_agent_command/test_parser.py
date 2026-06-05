@@ -5,8 +5,8 @@
 
 import pytest
 
-from yweb.agent import ArtifactRef, CallValue, ParsedCommand
-from yweb.agent.parser import (
+from yweb.agent.command import ArtifactRef, CallValue, ParsedCommand
+from yweb.agent.command.parser import (
     parse_command_output,
     parse_param_string,
     split_param_expressions,
@@ -260,3 +260,101 @@ class TestParseCommandOutput:
         result = parse_command_output("|<|my_func_2(a=1)|>|")
         assert result[0].toolname == "my_func_2"
         assert result[0].args == {"a": 1}
+
+
+class TestTolerance:
+    """容错行为测试：覆盖 AI 输出格式偏差时解析器的兼容能力"""
+
+    # ===== 命令包络层容错 =====
+
+    def test_tol_whitespace_after_open_marker(self):
+        """<| 和函数名之间有空白仍能解析"""
+        result = parse_command_output("<|  func(a=1)|>")
+        assert result == [ParsedCommand(toolname="func", args={"a": 1})]
+
+    def test_tol_whitespace_before_close_marker(self):
+        """) 和 |> 之间有空白仍能解析"""
+        result = parse_command_output("<|func(a=1)  |>")
+        assert result == [ParsedCommand(toolname="func", args={"a": 1})]
+
+    def test_tol_whitespace_between_name_and_paren(self):
+        """函数名和 ( 之间有空白仍能解析"""
+        result = parse_command_output("<|func  (a=1)|>")
+        assert result == [ParsedCommand(toolname="func", args={"a": 1})]
+
+    def test_tol_tail_with_extra_pipe(self):
+        """|>| 格式（多一个 |）能解析"""
+        result = parse_command_output("|<|func(a=1)|>|")
+        assert result == [ParsedCommand(toolname="func", args={"a": 1})]
+
+    def test_tol_tail_without_extra_pipe(self):
+        """|> 格式（不带尾 |）也能解析"""
+        result = parse_command_output("|<|func(a=1)|>")
+        assert result == [ParsedCommand(toolname="func", args={"a": 1})]
+
+    def test_tol_no_leading_pipe(self):
+        """<|func()|> 省略前导 | 也能解析"""
+        result = parse_command_output('<|notify(message="hi")|>')
+        assert result == [ParsedCommand(toolname="notify", args={"message": "hi"})]
+
+    def test_tol_command_prefix_optional(self):
+        """command= 前缀可省略"""
+        r1 = parse_command_output('command=|<|func(a=1)|>|')
+        r2 = parse_command_output('|<|func(a=1)|>')
+        assert r1 == r2
+
+    # ===== 参数解析层容错 =====
+
+    def test_tol_spaces_around_equals(self):
+        """key = value 等号前后有空白仍能解析"""
+        result = parse_param_string('name  =  "hello"')
+        assert result == {"name": "hello"}
+
+    def test_tol_spaces_around_value(self):
+        """值前后有多余空白会被 strip"""
+        result = parse_param_string('name=  "hello"  ')
+        assert result == {"name": "hello"}
+
+    def test_tol_empty_value(self):
+        """key= 后面为空，返回空字符串"""
+        result = parse_param_string("key=")
+        assert result == {"key": ""}
+
+    def test_tol_invalid_key_skipped(self):
+        """非法键名静默跳过，不影响后续合法参数"""
+        result = parse_param_string('123bad="x", good="y"')
+        assert result == {"good": "y"}
+
+    # ===== 字面量解析降级容错 =====
+
+    def test_tol_literal_fallback_quoted_malformed(self):
+        """带引号但内容不合法时，降级为去引号的原始内容"""
+        result = parse_param_string(r'x="hello\xworld"')
+        assert result["x"] == r"hello\xworld"
+
+    def test_tol_literal_fallback_unquoted_raw(self):
+        """无引号且无法 literal_eval 的值，保留原始字符串"""
+        result = parse_param_string("x=abc_xyz")
+        assert result == {"x": "abc_xyz"}
+
+    def test_tol_literal_fallback_unquoted_with_chinese(self):
+        """无引号的中文裸字符串，保留原始字符串"""
+        result = parse_param_string("x=你好世界")
+        assert result == {"x": "你好世界"}
+
+    # ===== 分隔符容错 =====
+
+    def test_tol_trailing_comma_ignored(self):
+        """尾随逗号不产生空项"""
+        result = parse_param_string('a=1, b=2,')
+        assert result == {"a": 1, "b": 2}
+
+    def test_tol_multiple_blank_lines(self):
+        """连续空行不产生空项"""
+        result = parse_param_string('a=1\n\n\nb=2\n\n')
+        assert result == {"a": 1, "b": 2}
+
+    def test_tol_comma_and_newline_mixed(self):
+        """逗号和换行混用都能正确分隔"""
+        result = parse_param_string('a=1,\nb=2\nc=3')
+        assert result == {"a": 1, "b": 2, "c": 3}

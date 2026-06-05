@@ -1,11 +1,11 @@
 ---
 name: yweb-agent-command
-description: YWeb Agent 指令系统使用规范。在编写或修改 LLM 文本指令的解析（parser）、构建（builder）、格式说明生成（prompt）、指令 DSL（函数式 item()/record()/@artifact()）等代码时使用。
+description: YWeb Agent 内部工具调用协议使用规范。在编写或修改 LLM 文本指令的解析（parser）、构建（builder）、格式说明生成（prompt）、指令 DSL（函数式 item()/record()/@artifact()）等代码时使用。
 ---
 
-# YWeb Agent 指令系统使用规范
+# YWeb Agent 内部工具调用协议使用规范
 
-本 Skill 是为 `yweb.agent`（Agent 指令系统）编写代码的**权威指南**。
+本 Skill 是为 `yweb.agent.command`（Agent 内部工具调用协议）编写代码的**权威指南**。
 
 > **核心定位**：本模块提供三项能力——
 >
@@ -19,16 +19,18 @@ description: YWeb Agent 指令系统使用规范。在编写或修改 LLM 文本
 
 ```
 yweb/agent/
-├── __init__.py          # 统一导出（公共 API 入口）
-├── types.py             # 数据模型：ParsedCommand / CallValue / ArtifactRef
-├── builder.py           # build_command（结构化 → command 文本）
-├── prompt.py            # CommandPromptBuilder（格式说明文本生成）
-└── parser/
-    ├── __init__.py
-    └── parser.py        # parse_command_output / parse_param_string / split_param_expressions
+├── __init__.py          # Agent 域入口；不导出 command 协议符号
+└── command/
+    ├── __init__.py      # 内部工具调用协议公共 API 入口
+    ├── types.py         # 数据模型：ParsedCommand / CallValue / ArtifactRef
+    ├── builder.py       # build_command（结构化 → command 文本）
+    ├── prompt.py        # CommandPromptBuilder（格式说明文本生成）
+    └── parser/
+        ├── __init__.py
+        └── parser.py    # parse_command_output / parse_param_string / split_param_expressions
 ```
 
-测试位于 `tests/test_agent/`：`test_parser.py` / `test_dsl.py` / `test_builder.py` / `test_prompt.py`。
+测试位于 `tests/test_agent_command/`：`test_parser.py` / `test_dsl.py` / `test_builder.py` / `test_prompt.py`。
 
 ---
 
@@ -112,7 +114,7 @@ item(name="A" text="任务")                      # ❌ 不支持：同行空格
 
 ## 4. 公共 API 速查
 
-全部从 `yweb.agent`（或顶层 `yweb`）导出：
+全部从 `yweb.agent.command` 导出；不要从 `yweb.agent` 或顶层 `yweb` 导出：
 
 | 符号 | 类型 | 说明 |
 |------|------|------|
@@ -148,7 +150,7 @@ class ArtifactRef:                      # @artifact("path")，仅产生引用标
 ## 5. 快速开始
 
 ```python
-from yweb.agent import (
+from yweb.agent.command import (
     build_command,
     CallValue,
     parse_command_output,
@@ -180,7 +182,7 @@ text = CommandPromptBuilder.function_prompt(
 根据工具名、描述、指令示例，拼出可供 LLM 提示词使用的格式说明文本。
 
 ```python
-from yweb.agent import CommandPromptBuilder
+from yweb.agent.command import CommandPromptBuilder
 
 CommandPromptBuilder.function_prompt(
     func_name="search",
@@ -206,7 +208,7 @@ CommandPromptBuilder.function_prompt(
 
 测试编写遵循 `.cursor/skills/yweb-testing/SKILL.md`，并注意本模块要点：
 
-- 解析/DSL/Builder/Prompt 用例分别放 `test_parser.py` / `test_dsl.py` / `test_builder.py` / `test_prompt.py`。
+- 解析/DSL/Builder/Prompt 用例分别放 `tests/test_agent_command/test_parser.py` / `test_dsl.py` / `test_builder.py` / `test_prompt.py`。
 - 每个核心行为至少一个**失败/边界反例**（空参数、缺字段、不配对括号 → `[]`）。
 - 测试失败时遵循 `test-quality-and-failure-workflow.mdc`：先诊断 → 给 ≥2 方案 → 用户确认后再改。
 
@@ -248,7 +250,7 @@ from json_repair import repair_json
 - [ ] 未引入外部运行时依赖（仅 `ast` / `re`）
 - [ ] 未 import 工作流引擎、LLM 客户端等外部运行时
 - [ ] 新数据容器用 `@dataclass`
-- [ ] 新符号已在 `agent/__init__.py` 与 `yweb/__init__.py` 同步导出
+- [ ] 新符号只在 `agent/command/__init__.py` 导出，未加入 `agent/__init__.py` 或 `yweb/__init__.py`
 - [ ] 命令提取仍用括号平衡扫描，未退回非贪婪正则
 - [ ] 解析失败优雅降级，不抛异常、不修复畸形 JSON
 - [ ] 新增/改动有对应单元测试 + 关键反例
