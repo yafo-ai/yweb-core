@@ -292,7 +292,7 @@ class PrimaryKeyGenerator:
             # 检查ID是否已存在
             try:
                 with allow_sync():
-                    existing = model_class.query.filter_by(id=new_id).first()
+                    existing = self._exists_by_id(model_class, new_id)
                 if existing is None:
                     return new_id
 
@@ -302,14 +302,40 @@ class PrimaryKeyGenerator:
                     f"重试 {attempt + 1}/{max_retries}"
                 )
             except Exception as e:
-                # 如果查询失败（比如表还不存在），直接返回ID
-                logger.debug(f"查询主键时出错（可能是表不存在）: {e}")
+                # 去重检测查询失败（表/列结构异常、连接问题等）。检测查询已被
+                # SAVEPOINT 隔离回滚（见 _exists_by_id），外层 flush 事务未被污染，
+                # 故此处放弃检测、返回该 ID，由随后的 INSERT 暴露真实错误。
+                # 不可在此静默吞掉：否则 PostgreSQL 下被污染的事务会让 INSERT 报
+                # 二级错误 InFailedSqlTransaction，彻底掩盖原始原因（如缺列），难以定位。
+                logger.warning(
+                    f"主键冲突检测查询失败，跳过检测并交由 INSERT 兜底: "
+                    f"{model_class.__name__}, {type(e).__name__}: {e}"
+                )
                 return new_id
 
         raise RuntimeError(
             f"生成主键失败：{max_retries}次尝试后仍然冲突，"
             f"模型: {model_class.__name__}"
         )
+
+    @staticmethod
+    def _exists_by_id(model_class, new_id) -> Any:
+        """去重检测查询：用 SAVEPOINT 隔离，确保查询失败不污染外层（flush 中）事务。
+
+        本查询在 before_insert 事件、flush 进行中执行。PostgreSQL 下一旦查询失败，
+        整个事务会进入 aborted 状态，随后的 INSERT 只会报 InFailedSqlTransaction，
+        把真实原因（缺列/类型不符等）掩盖掉。包一层 begin_nested() 后，查询失败仅
+        回滚到 SAVEPOINT，外层事务恢复可用，INSERT 得以抛出自身的真实错误。
+
+        无 session 的场景（如单元测试的 Mock query）退化为直接查询。
+        """
+        query = model_class.query
+        session = getattr(query, "session", None)
+        begin_nested = getattr(session, "begin_nested", None)
+        if callable(begin_nested):
+            with begin_nested():
+                return query.filter_by(id=new_id).first()
+        return query.filter_by(id=new_id).first()
 
 
 # ==================== 便捷函数 ====================
