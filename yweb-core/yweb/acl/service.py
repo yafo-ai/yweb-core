@@ -240,16 +240,27 @@ class AclService:
     def get_resource_tree(
         self, resource_type: Optional[str] = None
     ) -> list[dict]:
-        """获取资源树（嵌套结构）"""
-        if resource_type is None:
-            return self._resource_model.get_tree_list()
+        """获取资源树（嵌套结构）
 
+        显式过滤 ``deleted_at IS NULL``，不依赖隐式软删除重写器，
+        避免重写器被旁路（如 ``execution_options(include_deleted=True)``）
+        时已删除的资源节点泄漏进树。
+        """
         from yweb.orm.tree.tree_utils import build_tree_list
 
-        query = self._resource_model.query.filter(
-            self._resource_model.resource_type == resource_type,
-            self._resource_model.deleted_at.is_(None),
-        ).order_by(self._resource_model.level)
+        resource_model = self._resource_model
+        query = resource_model.query.filter(
+            resource_model.deleted_at.is_(None),
+        )
+        if resource_type is not None:
+            query = query.filter(resource_model.resource_type == resource_type)
+
+        # 排序与 TreeMixin.get_tree_list 保持一致：level 优先，sort_order 可用则附加
+        sort_field = getattr(resource_model, "sort_order", None)
+        if sort_field is not None:
+            query = query.order_by(resource_model.level, sort_field)
+        else:
+            query = query.order_by(resource_model.level)
 
         nodes = query.all()
         node_dicts = []
