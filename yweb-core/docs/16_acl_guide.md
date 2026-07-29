@@ -236,6 +236,7 @@ ACL 模块提供以下 RESTful API（通过 ResourceController）：
 |------|------|------|
 | GET | `/acl/rules/list?resource_type=X&resource_id=Y` | 查询规则列表 |
 | POST | `/acl/rules/create` | 创建规则 |
+| POST | `/acl/rules/create_batch` | 批量创建/更新规则（同一主体写到多个资源；同主体+效果已存在且等级/继承不同则更新） |
 | POST | `/acl/rules/update` | 更新规则 |
 | POST | `/acl/rules/delete` | 删除规则 |
 

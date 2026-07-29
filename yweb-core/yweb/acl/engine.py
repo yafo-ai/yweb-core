@@ -47,6 +47,25 @@ class AclEngine:
         rules = self._collect_rules(resource_type, resource_id)
         return self._resolve(rules, identities)
 
+    def get_effective_level_with_source(
+        self,
+        identities: set[str],
+        resource_type: str,
+        resource_id: str,
+    ) -> tuple[int, list[dict]]:
+        """计算有效权限等级 + 命中的来源规则（供管理面权限矩阵 / 用户权限详情追溯来源）。
+
+        Returns:
+            (level, sources) ——
+            level 为有效等级（0=无权限或 DENY 命中）；
+            sources 为命中规则列表（按 depth 升序），每项含
+            rule_id / subject_id / subject_type / effect / permission_level / depth / inherit。
+            DENY 命中时 level=0、sources 仅含该 DENY 规则；
+            无匹配时 level=0、sources 为空列表。
+        """
+        rules = self._collect_rules(resource_type, resource_id)
+        return self._resolve_with_source(rules, identities)
+
     def get_accessible(
         self,
         identities: set[str],
@@ -221,6 +240,46 @@ class AclEngine:
                 max_level = rule.permission_level
 
         return max_level
+
+    def _resolve_with_source(
+        self, rules: list[tuple], identities: set[str]
+    ) -> tuple[int, list[dict]]:
+        """DENY 优先 + 深度排序 → 最终等级 + 命中规则来源（对齐 _resolve 逻辑，额外返回来源）。"""
+        matched: list[tuple] = []
+        for rule, depth in rules:
+            if rule.subject_id in identities:
+                matched.append((rule, depth))
+
+        for rule, depth in matched:
+            if rule.effect == Effect.DENY:
+                return 0, [_rule_to_source(rule, depth)]
+
+        if not matched:
+            return 0, []
+
+        matched.sort(key=lambda x: x[1])
+
+        max_level = 0
+        sources: list[dict] = []
+        for rule, depth in matched:
+            if rule.effect == Effect.ALLOW:
+                sources.append(_rule_to_source(rule, depth))
+                if rule.permission_level > max_level:
+                    max_level = rule.permission_level
+        return max_level, sources
+
+
+def _rule_to_source(rule, depth: int) -> dict:
+    """规则 ORM 对象 → 来源 dict（供管理面展示，不含敏感字段）。"""
+    return {
+        "rule_id": getattr(rule, "id", None),
+        "subject_id": rule.subject_id,
+        "subject_type": getattr(rule, "subject_type", None),
+        "effect": rule.effect,
+        "permission_level": rule.permission_level,
+        "depth": depth,
+        "inherit": bool(getattr(rule, "inherit", True)),
+    }
 
 
 __all__ = ["AclEngine"]

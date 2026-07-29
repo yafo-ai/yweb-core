@@ -4,6 +4,8 @@ ACL 模块 - Pydantic Schemas
 
 from .rule import (
     CreateRuleRequest,
+    BatchCreateResourceItem,
+    BatchCreateRuleRequest,
     UpdateRuleRequest,
     DeleteRuleRequest,
 )
@@ -19,6 +21,8 @@ from .permission import (
 
 __all__ = [
     "CreateRuleRequest",
+    "BatchCreateResourceItem",
+    "BatchCreateRuleRequest",
     "UpdateRuleRequest",
     "DeleteRuleRequest",
     "RegisterResourceRequest",

@@ -53,6 +53,17 @@ class AclService:
         """获取有效权限等级"""
         return self._engine.get_effective_level(identities, resource_type, resource_id)
 
+    def get_effective_level_with_source(
+        self,
+        identities: set[str],
+        resource_type: str,
+        resource_id: str,
+    ) -> tuple[int, list[dict]]:
+        """获取有效权限等级 + 命中来源规则（管理面权限矩阵 / 用户权限详情追溯来源用）"""
+        return self._engine.get_effective_level_with_source(
+            identities, resource_type, resource_id
+        )
+
     def get_accessible(
         self,
         identities: set[str],
@@ -120,6 +131,133 @@ class AclService:
             resource_type, resource_id, subject_id, effect, permission_level,
         )
         return rule
+
+    def batch_create_rules(
+        self,
+        resources: list[dict],
+        subject_id: str,
+        permission_level: int,
+        effect: str = "ALLOW",
+        inherit: bool = True,
+        subject_type: str = "user",
+        dept_scope: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """批量创建或更新 ACL 规则（同一主体/效果/等级写到多个资源）。
+
+        请求内重复资源去重。目标上已有相同 subject_id + effect 的规则时：
+        permission_level 与 inherit 均相同则跳过，否则更新现有规则。
+        新建与更新一次事务提交。
+
+        Args:
+            resources: 每项含 resource_type、resource_id
+            subject_id: 身份标签
+            permission_level: 权限等级
+            effect: ALLOW / DENY
+            inherit: 是否向子资源传播
+            subject_type: 主体类型
+            dept_scope: 部门范围（可选）
+
+        Returns:
+            {
+                "created": [rule, ...],
+                "updated": [rule, ...],
+                "skipped": [{"resource_type", "resource_id", "reason"}, ...],
+            }
+
+        Raises:
+            ValueError: resources 为空或 effect 非法
+        """
+        Effect(effect)
+        if not resources:
+            raise ValueError("resources 不能为空")
+
+        unique: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+        for item in resources:
+            rt = item["resource_type"]
+            rid = item["resource_id"]
+            key = (rt, rid)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append({"resource_type": rt, "resource_id": rid})
+
+        from sqlalchemy import and_, or_
+
+        existing_by_key: dict[tuple[str, str], Any] = {}
+        existing_q = self._rule_model.query.filter(
+            self._rule_model.subject_id == subject_id,
+            self._rule_model.effect == effect,
+            self._rule_model.deleted_at.is_(None),
+            or_(
+                *[
+                    and_(
+                        self._rule_model.resource_type == r["resource_type"],
+                        self._rule_model.resource_id == r["resource_id"],
+                    )
+                    for r in unique
+                ]
+            ),
+        )
+        for rule in existing_q.all():
+            existing_by_key[(rule.resource_type, rule.resource_id)] = rule
+
+        to_create: list[dict] = []
+        to_update: list = []
+        skipped: list[dict] = []
+        for r in unique:
+            key = (r["resource_type"], r["resource_id"])
+            existing = existing_by_key.get(key)
+            if existing is None:
+                to_create.append(r)
+                continue
+
+            same_level = int(existing.permission_level) == int(permission_level)
+            same_inherit = bool(existing.inherit) == bool(inherit)
+            if same_level and same_inherit:
+                skipped.append({
+                    "resource_type": r["resource_type"],
+                    "resource_id": r["resource_id"],
+                    "reason": "duplicate",
+                })
+                continue
+
+            existing.permission_level = permission_level
+            existing.inherit = inherit
+            existing.dept_scope = dept_scope
+            to_update.append(existing)
+
+        created: list = []
+        if to_create:
+            for r in to_create:
+                created.append(
+                    self._rule_model(
+                        resource_type=r["resource_type"],
+                        resource_id=r["resource_id"],
+                        subject_id=subject_id,
+                        permission_level=permission_level,
+                        effect=effect,
+                        inherit=inherit,
+                        subject_type=subject_type,
+                        dept_scope=dept_scope,
+                        priority=0,
+                        conditions=None,
+                    )
+                )
+
+        if created or to_update:
+            self._rule_model.save_all([*created, *to_update], commit=True)
+            logger.info(
+                "ACL rules batch upsert: %d created, %d updated, %d skipped → %s [%s %d]",
+                len(created),
+                len(to_update),
+                len(skipped),
+                subject_id,
+                effect,
+                permission_level,
+            )
+
+        return {"created": created, "updated": to_update, "skipped": skipped}
 
     def update_rule(self, rule_id: Any, **kwargs: Any):
         """更新 ACL 规则"""

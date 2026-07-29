@@ -281,6 +281,9 @@ class BaseSyncService(ABC):
             - mobile: 手机号（可选）
             - email: 邮箱（可选）
             - department_ids: 所属部门的外部ID列表
+            - status: 雇佣状态（可选，EmployeeStatus 整型：
+              -1 离职 / 0 停职 / 1 待入职 / 2 试用 / 3 在职；
+              缺省时新建默认在职，更新不覆盖本地状态）
             - ... 其他字段
         """
         pass
@@ -447,9 +450,13 @@ class BaseSyncService(ABC):
                     employee = self.employee_model.get(rel.employee_id)
                     if employee:
                         self._update_employee_from_external(employee, rel, data)
-                        # 如果之前被标记为离职，恢复为外部数据中的状态
-                        if hasattr(rel, 'status') and rel.status == EmployeeStatus.RESIGNED.value:
-                            rel.status = data.get('status', EmployeeStatus.ACTIVE.value)
+                        # payload 未给 status 且当前为离职 → 恢复在职（重入职）
+                        if (
+                            'status' not in data
+                            and hasattr(rel, 'status')
+                            and rel.status == EmployeeStatus.RESIGNED.value
+                        ):
+                            rel.status = EmployeeStatus.ACTIVE.value
                             rel.save(commit=True)
                         result.updated_count += 1
                 else:
@@ -611,6 +618,7 @@ class BaseSyncService(ABC):
             org_id=org.id,
             emp_no=data.get('emp_no'),
             position=data.get('position'),
+            status=data.get('status', EmployeeStatus.ACTIVE.value),
             external_user_id=str(data.get('external_user_id', '')),
             external_union_id=data.get('external_union_id'),
         )
@@ -626,7 +634,8 @@ class BaseSyncService(ABC):
     ):
         """根据外部数据更新员工
         
-        子类可重写以处理特殊字段
+        子类可重写以处理特殊字段。
+        仅当 payload 显式含 status 时更新雇佣状态，避免每轮同步冲掉本地试用/停职等。
         """
         employee.name = data.get('name', employee.name)
         employee.mobile = data.get('mobile', employee.mobile)
@@ -638,6 +647,8 @@ class BaseSyncService(ABC):
         rel.emp_no = data.get('emp_no', rel.emp_no)
         rel.position = data.get('position', rel.position)
         rel.external_union_id = data.get('external_union_id', rel.external_union_id)
+        if 'status' in data:
+            rel.status = data['status']
         rel.save(commit=True)
     
     # ==================== 生命周期钩子（子类可覆写） ====================

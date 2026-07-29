@@ -9,7 +9,12 @@ from fastapi import APIRouter
 from yweb.controller import ResourceController, get
 from yweb.response import Resp
 
-from ..schemas import CreateRuleRequest, UpdateRuleRequest, DeleteRuleRequest
+from ..schemas import (
+    BatchCreateRuleRequest,
+    CreateRuleRequest,
+    DeleteRuleRequest,
+    UpdateRuleRequest,
+)
 
 class AclRuleController(ResourceController):
     prefix = "/rules"
@@ -43,6 +48,29 @@ class AclRuleController(ResourceController):
             dept_scope=body.dept_scope,
         )
         return Resp.OK(data=rule.to_dict())
+
+    def create_batch(self, body: BatchCreateRuleRequest):
+        """批量创建/更新 ACL 规则（同一主体写到多个资源；等级不同则更新现有规则）"""
+        service = self._get_service()
+        try:
+            result = service.batch_create_rules(
+                resources=[item.model_dump() for item in body.resources],
+                subject_id=body.subject_id,
+                permission_level=body.permission_level,
+                effect=body.effect,
+                inherit=body.inherit,
+                subject_type=body.subject_type,
+                dept_scope=body.dept_scope,
+            )
+        except ValueError as e:
+            return Resp.BadRequest(message=str(e))
+        return Resp.OK(
+            data={
+                "created": [r.to_dict() for r in result["created"]],
+                "updated": [r.to_dict() for r in result["updated"]],
+                "skipped": result["skipped"],
+            }
+        )
 
     def update(self, body: UpdateRuleRequest):
         """更新 ACL 规则"""
