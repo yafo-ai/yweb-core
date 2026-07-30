@@ -74,69 +74,41 @@ class AclEngine:
     ) -> list[str]:
         """反向查询：这组身份能访问哪些资源（返回 resource_id 列表）
 
-        算法：先按 subject_id 从规则表查出所有相关规则涉及的资源，
-        再对每个资源计算有效权限等级，过滤出 >= min_level 的。
+        指定 resource_type 时：枚举该类型全部资源节点，逐个算有效等级。
+        复杂度跟资源数成正比，避免旧算法「对每个 inherit 父节点 get_descendants」
+        在主体挂大量规则时的 N+1 爆炸（例如数百条 user:X inherit 规则）。
+
+        未指定 resource_type 时：按规则直接命中的资源做候选（不做跨类型继承展开）。
         """
-        query = self._rule_model.query.filter(
-            self._rule_model.subject_id.in_(identities),
-            self._rule_model.deleted_at.is_(None),
+        if resource_type:
+            resources = (
+                self._resource_model.query.filter(
+                    self._resource_model.resource_type == resource_type,
+                    self._resource_model.deleted_at.is_(None),
+                ).all()
+            )
+            return [
+                r.resource_id
+                for r in resources
+                if self.get_effective_level(identities, resource_type, r.resource_id)
+                >= min_level
+            ]
+
+        # 未指定类型：仅按规则直接命中的资源做候选（与历史行为一致，不做跨类型继承展开）
+        rules = (
+            self._rule_model.query.filter(
+                self._rule_model.subject_id.in_(identities),
+                self._rule_model.deleted_at.is_(None),
+            ).all()
         )
-        if resource_type:
-            query = query.filter(self._rule_model.resource_type == resource_type)
-
-        rules = query.all()
-
-        candidate_keys: set[tuple[str, str]] = set()
-        for rule in rules:
-            candidate_keys.add((rule.resource_type, rule.resource_id))
-
-        if resource_type:
-            inherited = self._find_inherited_resources(resource_type, identities)
-            candidate_keys.update(inherited)
-
+        candidate_keys: set[tuple[str, str]] = {
+            (rule.resource_type, rule.resource_id) for rule in rules
+        }
         result = []
         for rt, rid in candidate_keys:
             level = self.get_effective_level(identities, rt, rid)
             if level >= min_level:
                 result.append(rid)
-
-        return result
-
-    def _find_inherited_resources(
-        self, resource_type: str, identities: set[str]
-    ) -> set[tuple[str, str]]:
-        """查找通过继承获得权限的子资源"""
-        inherited_rules = (
-            self._rule_model.query.filter(
-                self._rule_model.subject_id.in_(identities),
-                self._rule_model.inherit.is_(True),
-                self._rule_model.deleted_at.is_(None),
-            )
-            .all()
-        )
-
-        parent_keys = set()
-        for rule in inherited_rules:
-            parent_keys.add((rule.resource_type, rule.resource_id))
-
-        result: set[tuple[str, str]] = set()
-        for rt, rid in parent_keys:
-            parent_resource = (
-                self._resource_model.query.filter(
-                    self._resource_model.resource_type == rt,
-                    self._resource_model.resource_id == rid,
-                    self._resource_model.deleted_at.is_(None),
-                )
-                .first()
-            )
-            if not parent_resource:
-                continue
-
-            descendants = parent_resource.get_descendants()
-            for desc in descendants:
-                if desc.resource_type == resource_type:
-                    result.add((desc.resource_type, desc.resource_id))
-
         return result
 
     def _collect_rules(
