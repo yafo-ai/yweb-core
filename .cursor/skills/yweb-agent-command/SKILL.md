@@ -119,11 +119,11 @@ item(name="A" text="任务")                      # ❌ 不支持：同行空格
 | 符号 | 类型 | 说明 |
 |------|------|------|
 | `parse_command_output(text)` | 函数 | 文本 → `List[ParsedCommand]`（括号平衡扫描，支持嵌套） |
-| `parse_param_string(s)` | 函数 | 参数串 → `Dict[str, Any]`（值含 `CallValue`/`ArtifactRef`/字面量） |
-| `split_param_expressions(s)` | 函数 | 状态机分割参数表达式（兼容换行/逗号，**不认同行空格**） |
+| `parse_param_string(s, *, unparsed=None)` | 函数 | 参数串 → `Dict[str, Any]`（值含 `CallValue`/`ArtifactRef`/字面量）；传 `unparsed` 列表可回收未解析表达式 |
+| `split_param_expressions(s, *, kv_lookahead=False)` | 函数 | 状态机分割参数表达式（兼容换行/逗号，**不认同行空格**）；`kv_lookahead` 见 §4.2 |
 | `build_command(toolname, **params)` | 函数 | 结构化参数 → `command=|<|...|>|` 文本（`parse` 的逆操作） |
 | `CommandPromptBuilder` | 类 | 指令格式说明文本生成 |
-| `ParsedCommand` | dataclass | 解析后的指令（`toolname` / `args`） |
+| `ParsedCommand` | dataclass | 解析后的指令（`toolname` / `args` / `unparsed`） |
 | `CallValue` | dataclass | 函数式嵌套对象（`name` / `args`） |
 | `ArtifactRef` | dataclass | 工件引用（`path`，仅标记不读文件） |
 
@@ -134,6 +134,7 @@ item(name="A" text="任务")                      # ❌ 不支持：同行空格
 class ParsedCommand:
     toolname: str                       # 工具名，永不为空
     args: Dict[str, Any]
+    unparsed: List[str]                 # 未纳入 args 的表达式原文，空列表=全部已解析
 
 @dataclass
 class CallValue:                        # item(name=..., text=...) 等嵌套对象
@@ -144,6 +145,24 @@ class CallValue:                        # item(name=..., text=...) 等嵌套对�
 class ArtifactRef:                      # @artifact("path")，仅产生引用标记，不读文件
     path: str
 ```
+
+### 4.2 未解析表达式不静默丢弃
+
+模型写歪的参数不会无声消失，而是记入 `ParsedCommand.unparsed`。两类情况会记入：
+
+1. 不符合 `key=value` 形式的表达式，如漏写 `key=` 的位置参数 `set_form([setValue(...)])`；
+2. 形似 `[...]` / `{...}` 容器但字面量解析失败的值，如 `patches=[{type="setValue"}]` 这类花括号对象数组。
+
+未加引号的裸字符串（`value=年假`）与 `@artifact("path")` 的位置参数都是协议内合法写法，**不**记入。
+
+```python
+for cmd in parse_command_output(text):
+    if cmd.unparsed:
+        logger.warning("指令 %s 有 %d 处未解析：%s", cmd.toolname, len(cmd.unparsed), cmd.unparsed)
+    process(cmd.toolname, cmd.args)
+```
+
+切分参数列表时（`parse_param_string` 内部）启用 `kv_lookahead=True`：顶层分隔符只有在**后面紧跟 `标识符=`／已到末尾**，或**前面的值以引号/右括号收尾**时才切分。因此未加引号的值里出现逗号（`value=A, B`）会完整保留为 `"A, B"`，不会切出 `B` 再被丢弃。切分数组元素时不启用——数组元素形如 `setValue(...)`，后面跟的是 `(` 而非 `=`。
 
 ---
 
@@ -198,9 +217,15 @@ CommandPromptBuilder.function_prompt(
 
 - `parse_command_output`：**括号平衡扫描**——`_COMMAND_START` 定位 `<|name(`，用
   `_find_matching_paren`（引号/转义感知）找匹配 `)`，再要求其后为 `|>`。**禁止退回非贪婪正则**。
-- `parse_param_string` → `split_param_expressions` 拆参数 → 每个值过 `_parse_value`。
+- `parse_param_string` → `split_param_expressions(kv_lookahead=True)` 拆参数 → 每个值过 `_parse_value`。
 - `_parse_value` 优先级：`@artifact(...)` → `name(...)` 函数调用（`CallValue`，递归）→
   含调用/引用的数组（逐元素解析）→ 否则 `_parse_literal`（纯 `ast.literal_eval`，失败降级）。
+- `unparsed` 回收列表沿 `parse_param_string` → `_parse_value` → `_try_parse_call` /
+  `_try_parse_array_with_calls` / `_parse_literal` 下传，因此嵌套对象内部的问题也能回报。
+  **唯独不下传给 `_parse_reference`**——`@artifact("path")` 的位置参数是协议内合法写法，
+  下传会误报。改这条链时保持此例外。
+- 数组元素切分**不能**启用 `kv_lookahead`：元素形如 `setValue(...)`，后面跟 `(` 而非 `=`，
+  启用会导致整个数组切不开。
 
 ---
 

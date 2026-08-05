@@ -358,3 +358,105 @@ class TestTolerance:
         """逗号和换行混用都能正确分隔"""
         result = parse_param_string('a=1,\nb=2\nc=3')
         assert result == {"a": 1, "b": 2, "c": 3}
+
+
+class TestUnquotedValueWithComma:
+    """未加引号的值内含逗号时不丢失后半截"""
+
+    def test_unquoted_value_keeps_comma_tail(self):
+        """value=A, B 完整保留为 "A, B"，不再切出 B 后丢弃"""
+        result = parse_param_string('field="content", value=A, B')
+        assert result == {"field": "content", "value": "A, B"}
+
+    def test_unquoted_chinese_value_keeps_comma_tail(self):
+        """中文裸值含英文逗号同样完整保留"""
+        result = parse_param_string('value=打印机坏了, 需要维修')
+        assert result == {"value": "打印机坏了, 需要维修"}
+
+    def test_quoted_value_still_splits(self):
+        """引号收尾的值之后，分隔符仍按分隔符处理"""
+        result = parse_param_string('field="a", value="b"')
+        assert result == {"field": "a", "value": "b"}
+
+    def test_split_default_mode_unchanged(self):
+        """split_param_expressions 默认不启用前瞻，逐个分隔符都切分"""
+        assert split_param_expressions("value=A, B") == ["value=A", "B"]
+
+    def test_split_lookahead_mode_merges(self):
+        """启用前瞻后，未跟 key= 的分隔符并入前一个值"""
+        assert split_param_expressions("value=A, B", kv_lookahead=True) == ["value=A, B"]
+
+    def test_array_elements_still_split(self):
+        """数组元素靠换行分隔（元素后跟 ( 而非 =），前瞻不影响其切分"""
+        result = parse_param_string(
+            'patches=[setValue(field="a", value=1)\nsetValue(field="b", value=2)]'
+        )
+        assert result == {
+            "patches": [
+                CallValue(name="setValue", args={"field": "a", "value": 1}),
+                CallValue(name="setValue", args={"field": "b", "value": 2}),
+            ]
+        }
+
+
+class TestUnparsedReport:
+    """未解析表达式回报通道：不再静默丢弃"""
+
+    def test_positional_arg_reported(self):
+        """漏写 key= 的位置参数记入 unparsed，而非静默消失"""
+        result = parse_command_output('command=|<|set_form([setValue(field="a", value=1)])|>|')
+        assert len(result) == 1
+        assert result[0].args == {}
+        assert result[0].unparsed == ['[setValue(field="a", value=1)]']
+
+    def test_brace_object_array_reported(self):
+        """花括号对象数组解析不出结构，记入 unparsed"""
+        result = parse_command_output('command=|<|set_form(patches=[{type="setValue"}])|>|')
+        assert len(result) == 1
+        assert result[0].unparsed == ['[{type="setValue"}]']
+
+    def test_nested_positional_arg_reported(self):
+        """嵌套函数调用内部的位置参数也回报"""
+        result = parse_command_output('command=|<|set_form(patches=[setValue(field="a", 1)])|>|')
+        assert len(result) == 1
+        assert result[0].unparsed == ["1"]
+
+    def test_invalid_key_reported(self):
+        """非法键名的表达式记入 unparsed"""
+        result = parse_command_output('command=|<|f(123bad="x", good="y")|>|')
+        assert result[0].args == {"good": "y"}
+        assert result[0].unparsed == ['123bad="x"']
+
+    def test_valid_command_reports_nothing(self):
+        """合法指令的 unparsed 为空"""
+        result = parse_command_output(
+            'command=|<|set_form(patches=[setValue(field="a", value=1)])|>|'
+        )
+        assert result[0].args == {
+            "patches": [CallValue(name="setValue", args={"field": "a", "value": 1})]
+        }
+        assert result[0].unparsed == []
+
+    def test_unquoted_bare_string_not_reported(self):
+        """无引号裸字符串是协议允许的容错写法，不记入 unparsed"""
+        result = parse_command_output('command=|<|f(x=年假, y=abc_xyz)|>|')
+        assert result[0].args == {"x": "年假", "y": "abc_xyz"}
+        assert result[0].unparsed == []
+
+    def test_artifact_positional_not_reported(self):
+        """@artifact("path") 的位置参数是合法写法，不误报"""
+        result = parse_command_output('command=|<|f(x=@artifact("sql/q.sql"))|>|')
+        assert result[0].args == {"x": ArtifactRef(path="sql/q.sql")}
+        assert result[0].unparsed == []
+
+    def test_parse_param_string_without_sink_unchanged(self):
+        """不传 unparsed 时保持原行为：丢弃且不留痕迹"""
+        result = parse_param_string('123bad="x", good="y"')
+        assert result == {"good": "y"}
+
+    def test_parse_param_string_with_sink(self):
+        """传入 unparsed 时按出现顺序追加"""
+        sink: list[str] = []
+        result = parse_param_string('123bad="x", good="y"', unparsed=sink)
+        assert result == {"good": "y"}
+        assert sink == ['123bad="x"']

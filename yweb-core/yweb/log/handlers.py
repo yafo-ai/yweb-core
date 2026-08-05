@@ -39,12 +39,61 @@ import atexit
 import logging
 import os
 import re
+import shutil
 import time
 import threading
 import weakref
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 from typing import List, Tuple, Optional
+
+
+def _safe_replace(src: str, dst: str, *, retries: int = 10, delay: float = 0.05) -> bool:
+    """将 src 轮转为 dst，兼容 Windows 文件占用。
+
+    uvicorn --reload 的父进程、杀毒或编辑器可能短暂占用日志文件，
+    此时 os.rename 会抛出 PermissionError（WinError 32）。
+    先短重试；仍失败则 copy 到备份再截断源文件；截断也失败则放弃本次轮转。
+
+    Returns:
+        True 表示 dst 已写入有效备份；False 表示跳过轮转（调用方继续追加写）。
+    """
+    last_err: Optional[OSError] = None
+    for i in range(retries):
+        try:
+            if os.path.exists(dst):
+                os.remove(dst)
+            os.rename(src, dst)
+            return True
+        except PermissionError as e:
+            last_err = e
+            time.sleep(delay * (i + 1))
+        except OSError as e:
+            if getattr(e, "winerror", None) == 32:
+                last_err = e
+                time.sleep(delay * (i + 1))
+            else:
+                raise
+
+    try:
+        if os.path.exists(dst):
+            try:
+                os.remove(dst)
+            except OSError:
+                pass
+        shutil.copy2(src, dst)
+        try:
+            with open(src, "r+", encoding="utf-8", errors="replace") as f:
+                f.truncate(0)
+        except OSError:
+            # 源文件仍被占用：备份已落盘，继续追加写即可
+            pass
+        return True
+    except OSError:
+        if last_err is not None:
+            # 无法轮转时不向外抛，避免 logging.emit 打出 Logging error 堆栈
+            return False
+        return False
 
 
 class TimeAndSizeRotatingFileHandler(RotatingFileHandler):
@@ -263,22 +312,17 @@ class TimeAndSizeRotatingFileHandler(RotatingFileHandler):
             if self.backupCount > 0:
                 base_name, ext = os.path.splitext(self.baseFilename)
                 
-                # 删除超出保留数量的旧文件
+                # 删除超出保留数量的旧文件（Windows 下可能短暂占用，失败则跳过该档）
                 for i in range(self.backupCount - 1, 0, -1):
                     sfn = f"{base_name}.{i}{ext}"
                     dfn = f"{base_name}.{i+1}{ext}"
                     if os.path.exists(sfn):
-                        if os.path.exists(dfn):
-                            os.remove(dfn)
-                        os.rename(sfn, dfn)
+                        _safe_replace(sfn, dfn)
                 
                 # 重命名当前文件
                 dfn = f"{base_name}.1{ext}"
-                if os.path.exists(dfn):
-                    os.remove(dfn)
-                
                 if os.path.exists(self.baseFilename):
-                    os.rename(self.baseFilename, dfn)
+                    _safe_replace(self.baseFilename, dfn)
         
         # 更新基础文件名为新的日期文件
         self.baseFilename = new_filename

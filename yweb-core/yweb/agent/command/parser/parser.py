@@ -17,7 +17,15 @@ from typing import Any, Dict, List, Optional
 from ..types import ArtifactRef, CallValue, ParsedCommand
 
 
-def split_param_expressions(s: str) -> List[str]:
+# 顶层分隔符之后是否紧跟新的 `key=`（或已到末尾）。
+# 用 .match(s, pos) 定位，故不能带 ``^``——``^`` 只在串首生效，会导致永不切分。
+_KV_AHEAD = re.compile(r"\s*(?:[a-zA-Z_]\w*\s*=|\Z)")
+
+# 值的收尾字符：引号闭合或括号闭合，说明当前值已完整，其后的分隔符必是分隔符。
+_VALUE_END_CHARS = ('"', "'", ")", "]", "}")
+
+
+def split_param_expressions(s: str, *, kv_lookahead: bool = False) -> List[str]:
     """使用状态机分割参数表达式，处理嵌套结构和转义字符。
 
     顶层分隔符同时兼容逗号 ``,`` 与换行 ``\\n``（DSL 标准写法用换行，亦兼容逗号）。
@@ -26,6 +34,24 @@ def split_param_expressions(s: str) -> List[str]:
 
     Args:
         s: 要分割的字符串。
+        kv_lookahead: 是否要求顶层分隔符后紧跟 ``key=`` 才切分。
+
+            默认 ``False``：每个顶层 ``,`` / ``\\n`` 都切分，用于切分数组元素
+            ——数组元素形如 ``setValue(...)``，后面跟的是 ``(`` 而非 ``=``。
+
+            置 ``True`` 用于切分参数列表（``parse_param_string`` 如此调用）：
+            此时分隔符满足以下任一条件才切分，否则视为值的一部分——
+
+            1. 后面紧跟 ``标识符=``，或已到末尾；
+            2. 前面的值以引号或右括号收尾，说明值本身已完整。
+
+            这样未加引号的值里出现逗号（如 ``value=A, B``）会完整保留为
+            ``"A, B"``，而不是切出无法匹配 ``key=value`` 的 ``B`` 再被丢弃；
+            同时 ``field="a", 1`` 这类引号收尾后的多余位置参数仍会被切出来，
+            交由 ``parse_param_string`` 回报，不会污染前一个值。
+
+            残留边界：值与多余内容都未加引号且都是字面量时（如 ``a=1, 2``）无法
+            区分，会并成一个值 ``(1, 2)``。这仍比原先切出后静默丢弃保留更多信息。
 
     Returns:
         分割后的参数表达式列表（已 strip，无空项）。
@@ -84,7 +110,11 @@ def split_param_expressions(s: str) -> List[str]:
 
         # 处理参数分隔符（逗号或换行）
         elif char in (",", "\n"):
-            if not stack:  # 不在嵌套结构中
+            if not stack and (  # 不在嵌套结构中
+                not kv_lookahead
+                or _KV_AHEAD.match(s, i + 1)
+                or "".join(current).rstrip().endswith(_VALUE_END_CHARS)
+            ):
                 token = "".join(current).strip()
                 if token:
                     result.append(token)
@@ -143,11 +173,14 @@ def _find_matching_paren(s: str, open_idx: int) -> Optional[int]:
     return None
 
 
-def _try_parse_call(value_str: str) -> Optional[CallValue]:
+def _try_parse_call(
+    value_str: str, *, unparsed: Optional[List[str]] = None
+) -> Optional[CallValue]:
     """尝试把整个值解析为函数式内部对象 ``name(...)`` → ``CallValue``。
 
     仅当值是“未加引号的标识符 + 括号”且括号闭合后无多余字符时才匹配，
-    否则返回 None（交由字面量解析处理）。函数参数递归调用 ``parse_param_string``。
+    否则返回 None（交由字面量解析处理）。函数参数递归调用 ``parse_param_string``，
+    ``unparsed`` 一并下传，使嵌套对象内部的未解析表达式也能回报。
     """
     m = re.match(r"^([a-zA-Z_]\w*)\s*\(", value_str)
     if not m:
@@ -161,14 +194,22 @@ def _try_parse_call(value_str: str) -> Optional[CallValue]:
         return None
     name = m.group(1)
     inner = value_str[open_idx + 1: close_idx]
-    return CallValue(name=name, args=parse_param_string(inner))
+    return CallValue(name=name, args=parse_param_string(inner, unparsed=unparsed))
 
 
-def _parse_literal(value_str: str) -> Any:
+# 形似 [...] / {...} 容器的值：字面量解析失败即为结构性错误，而非无引号裸字符串。
+_LOOKS_LIKE_CONTAINER = re.compile(r"^[\[{].*[\]}]$", re.DOTALL)
+
+
+def _parse_literal(value_str: str, *, unparsed: Optional[List[str]] = None) -> Any:
     """解析字面量值（引号字符串 / 列表 / 字典 / 数字 / 布尔）。
 
     使用 ``ast.literal_eval`` 安全解析；失败时降级为去引号或保留原始字符串。
     不做畸形 JSON 修复（不引入外部依赖）。
+
+    降级为原始字符串时，仅当值形似 ``[...]`` / ``{...}`` 容器才记入 ``unparsed``：
+    这类值本应是结构化的，解析失败意味着写法不合协议（如 ``[{type="x"}]``）；
+    而未加引号的裸字符串（如 ``value=年假``）是协议允许的容错写法，不记入。
     """
     # 处理引号包裹的字符串
     if (value_str.startswith('"') and value_str.endswith('"')) or (
@@ -185,6 +226,8 @@ def _parse_literal(value_str: str) -> Any:
         return ast.literal_eval(value_str)
     except (SyntaxError, ValueError):
         # 无法解析时保留原始字符串
+        if unparsed is not None and _LOOKS_LIKE_CONTAINER.match(value_str):
+            unparsed.append(value_str)
         return value_str
 
 
@@ -223,7 +266,9 @@ def _looks_like_call_or_ref(s: str) -> bool:
     return bool(re.match(r"^[a-zA-Z_]\w*\s*\(", s))
 
 
-def _try_parse_array_with_calls(value_str: str) -> Optional[list]:
+def _try_parse_array_with_calls(
+    value_str: str, *, unparsed: Optional[List[str]] = None
+) -> Optional[list]:
     """当数组 ``[...]`` 含函数调用/``@`` 引用元素时，按元素递归解析为列表。
 
     纯字面量数组（不含调用/引用）返回 None，交由 ``_parse_literal`` 整体解析
@@ -232,13 +277,14 @@ def _try_parse_array_with_calls(value_str: str) -> Optional[list]:
     if not (value_str.startswith("[") and value_str.endswith("]")):
         return None
     inner = value_str[1:-1]
+    # 数组元素形如 setValue(...)，后面跟 ``(`` 而非 ``=``，故不启用 kv_lookahead。
     parts = split_param_expressions(inner)
     if not any(_looks_like_call_or_ref(p) for p in parts):
         return None
-    return [_parse_value(p) for p in parts]
+    return [_parse_value(p, unparsed=unparsed) for p in parts]
 
 
-def _parse_value(value_str: str) -> Any:
+def _parse_value(value_str: str, *, unparsed: Optional[List[str]] = None) -> Any:
     """解析单个参数值。
 
     优先级：``@artifact(...)`` 引用 → 函数式内部对象 ``name(...)`` →
@@ -249,27 +295,33 @@ def _parse_value(value_str: str) -> Any:
         return v
 
     if v.startswith("@"):
+        # @artifact("path") 的位置参数是协议内合法写法，不下传 unparsed 以免误报。
         ref = _parse_reference(v)
         if ref is not None:
             return ref
 
-    call = _try_parse_call(v)
+    call = _try_parse_call(v, unparsed=unparsed)
     if call is not None:
         return call
 
-    array = _try_parse_array_with_calls(v)
+    array = _try_parse_array_with_calls(v, unparsed=unparsed)
     if array is not None:
         return array
 
-    return _parse_literal(v)
+    return _parse_literal(v, unparsed=unparsed)
 
 
-def parse_param_string(param_str: str) -> Dict[str, Any]:
+def parse_param_string(
+    param_str: str, *, unparsed: Optional[List[str]] = None
+) -> Dict[str, Any]:
     """解析参数字符串为键值对字典。
 
     Args:
         param_str: 格式如 ``'key1=value1, key2=value2, ...'`` 的字符串
             （分隔符兼容逗号与换行）。
+        unparsed: 可选的回收列表。传入时，未能纳入返回字典的表达式原文会按出现
+            顺序追加进来（含嵌套对象内部），调用方据此判断输入是否被丢弃；
+            不传则沿用原行为——丢弃且不留痕迹。
 
     Returns:
         包含解析后键值对的字典。值可能是字面量、``CallValue`` 等。
@@ -278,7 +330,7 @@ def parse_param_string(param_str: str) -> Dict[str, Any]:
     if not param_str:
         return {}
 
-    expressions = split_param_expressions(param_str)
+    expressions = split_param_expressions(param_str, kv_lookahead=True)
     params: Dict[str, Any] = {}
     pattern = re.compile(r"^([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(.*)$", re.DOTALL)
 
@@ -289,11 +341,13 @@ def parse_param_string(param_str: str) -> Dict[str, Any]:
 
         match = pattern.match(expr)
         if not match:
+            if unparsed is not None:
+                unparsed.append(expr)
             continue
 
         key = match.group(1)
         value_str = match.group(2).strip()
-        params[key] = _parse_value(value_str)
+        params[key] = _parse_value(value_str, unparsed=unparsed)
 
     return params
 
@@ -308,6 +362,9 @@ def parse_command_output(output: str) -> List[ParsedCommand]:
     识别 ``|<| func_name(args) |>|`` 格式。采用**括号平衡扫描**（替代非贪婪正则）：
     定位 ``func_name(`` 后，用引号/转义感知的方式找到与之匹配的 ``)``，再要求其后为
     ``|>``。因此支持嵌套函数调用，如 ``|<|invoke(items=[item(name="x")])|>|``。
+
+    参数中未能解析的表达式不会被静默丢弃，而是记入对应 ``ParsedCommand.unparsed``，
+    供调用方判断模型输出是否被部分丢弃。
 
     Args:
         output: LLM 的原始文本输出。
@@ -334,8 +391,10 @@ def parse_command_output(output: str) -> List[ParsedCommand]:
         tail = _COMMAND_TAIL.match(output, close_idx + 1)
         if tail:
             params_str = output[open_idx + 1: close_idx]
+            unparsed: List[str] = []
+            args = parse_param_string(params_str, unparsed=unparsed)
             commands.append(
-                ParsedCommand(toolname=func_name, args=parse_param_string(params_str))
+                ParsedCommand(toolname=func_name, args=args, unparsed=unparsed)
             )
             pos = tail.end()
         else:
