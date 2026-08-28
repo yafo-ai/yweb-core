@@ -1107,6 +1107,8 @@ def get_me(user=Depends(auth.get_current_user)):
 
 **完整示例：登出接口**
 
+`create_auth_router` 预置的 `POST /logout` 已按同一契约实现：必须携带当前 `Authorization: Bearer`，只撤销这一张访问令牌；不再接受 `user_id` 查询参数。撤销该用户全部令牌请走服务层 `auth_service.logout(user_id)`，或自行挂载需鉴权的管理端点。
+
 ```python
 @app.post("/auth/logout")
 def logout(

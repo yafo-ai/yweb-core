@@ -293,7 +293,7 @@ class AuthSetup:
             enable_oauth2_token: 是否启用 POST /token（OAuth2 密码模式）
             enable_json_login: 是否启用 POST /login（JSON 登录）
             enable_refresh: 是否启用 POST /refresh（刷新令牌）
-            enable_logout: 是否启用 POST /logout（登出）
+            enable_logout: 是否启用 POST /logout（须当前 Bearer，只撤销这一张令牌）
             enable_kick: 是否启用 POST /kick（踢出用户，默认关闭）
             login_response_builder: 自定义登录响应构建函数
             user_response_dto: 自定义用户响应 DTO 类型
@@ -579,7 +579,7 @@ def setup_auth(
         enable_oauth2_token: 是否启用 POST /token（默认 True）
         enable_json_login: 是否启用 POST /login（默认 True）
         enable_refresh: 是否启用 POST /refresh（默认 True）
-        enable_logout: 是否启用 POST /logout（默认 True）
+        enable_logout: 是否启用 POST /logout（须当前 Bearer，只撤销这一张令牌，默认 True）
         enable_kick: 是否启用 POST /kick（默认 False）
         login_response_builder: 自定义登录响应构建函数
         user_response_dto: 自定义用户响应 DTO 类型

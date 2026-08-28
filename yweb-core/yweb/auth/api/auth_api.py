@@ -6,7 +6,7 @@
     POST /token   - OAuth2 密码模式登录
     POST /login   - JSON 用户名密码登录
     POST /refresh - 刷新访问令牌
-    POST /logout  - 用户登出
+    POST /logout  - 用户登出（须当前 Bearer，只撤销这一张访问令牌）
     POST /kick    - 踢出用户
 
 使用示例::
@@ -20,13 +20,13 @@
 from typing import Type, Optional, Callable, TYPE_CHECKING
 
 from fastapi import APIRouter, Request, Depends
-from fastapi.security import OAuth2PasswordRequestForm
+from fastapi.security import OAuth2PasswordRequestForm, HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel as PydanticBaseModel, Field, ConfigDict
 
 from yweb.response import Resp, ItemResponse, OkResponse
 from yweb.orm import DTO
 from yweb.log import get_logger
-from yweb.exceptions import AuthenticationException
+from yweb.exceptions import AuthenticationException, ErrorCode
 
 if TYPE_CHECKING:
     from ..service import BaseAuthService
@@ -67,7 +67,7 @@ def create_auth_router(
         enable_oauth2_token: 是否启用 POST /token（OAuth2 密码模式，默认 True）
         enable_json_login: 是否启用 POST /login（JSON 登录，默认 True）
         enable_refresh: 是否启用 POST /refresh（刷新令牌，默认 True）
-        enable_logout: 是否启用 POST /logout（登出，默认 True）
+        enable_logout: 是否启用 POST /logout（须当前 Bearer，只撤销这一张令牌，默认 True）
         enable_kick: 是否启用 POST /kick（踢出用户，默认 False）
         login_response_builder: 自定义登录响应构建函数 (user, access_token, refresh_token) -> dict
         user_response_dto: 自定义用户响应 DTO 类型（默认使用内置的 DefaultUserResponse）
@@ -247,10 +247,37 @@ def create_auth_router(
             }, "刷新令牌成功")
 
     if enable_logout:
+        logout_bearer = HTTPBearer(auto_error=False)
+
         @router.post("/logout", response_model=OkResponse, summary="用户登出")
-        def logout(user_id: int):
-            """撤销用户的所有令牌"""
-            auth_service.logout(user_id)
+        def logout(
+            credentials: Optional[HTTPAuthorizationCredentials] = Depends(logout_bearer),
+        ):
+            """撤销当前请求携带的访问令牌。
+
+            必须在 Authorization 中携带当前 Bearer。
+            不接受客户端指定 user_id，也不撤销该用户的其他令牌。
+            """
+            token = credentials.credentials if credentials else None
+            if not token:
+                raise AuthenticationException("未提供访问令牌")
+
+            token_data = jwt_manager.verify_token(token)
+            if not token_data or not token_data.user_id:
+                raise AuthenticationException(
+                    "访问令牌无效或已过期",
+                    code=ErrorCode.INVALID_TOKEN,
+                )
+            if token_data.token_type != "access":
+                raise AuthenticationException(
+                    "访问令牌无效或已过期",
+                    code=ErrorCode.INVALID_TOKEN,
+                )
+
+            blacklist = token_blacklist or getattr(auth_service, "token_blacklist", None)
+            if blacklist:
+                blacklist.revoke_token(token, reason="user_logout")
+
             return Resp.OK(message="登出成功")
 
     if enable_kick:
