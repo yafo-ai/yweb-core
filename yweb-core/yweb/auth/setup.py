@@ -58,6 +58,7 @@
 
 from dataclasses import dataclass, field
 from typing import Type, Optional, Callable, Any, Union
+import sys
 
 from .jwt import JWTManager
 from yweb.log import get_logger
@@ -292,7 +293,7 @@ class AuthSetup:
             enable_oauth2_token: 是否启用 POST /token（OAuth2 密码模式）
             enable_json_login: 是否启用 POST /login（JSON 登录）
             enable_refresh: 是否启用 POST /refresh（刷新令牌）
-            enable_logout: 是否启用 POST /logout（登出）
+            enable_logout: 是否启用 POST /logout（须当前 Bearer，只撤销这一张令牌）
             enable_kick: 是否启用 POST /kick（踢出用户，默认关闭）
             login_response_builder: 自定义登录响应构建函数
             user_response_dto: 自定义用户响应 DTO 类型
@@ -578,7 +579,7 @@ def setup_auth(
         enable_oauth2_token: 是否启用 POST /token（默认 True）
         enable_json_login: 是否启用 POST /login（默认 True）
         enable_refresh: 是否启用 POST /refresh（默认 True）
-        enable_logout: 是否启用 POST /logout（默认 True）
+        enable_logout: 是否启用 POST /logout（须当前 Bearer，只撤销这一张令牌，默认 True）
         enable_kick: 是否启用 POST /kick（默认 False）
         login_response_builder: 自定义登录响应构建函数
         user_response_dto: 自定义用户响应 DTO 类型
@@ -759,12 +760,19 @@ def _setup_roles(
     
     # 1. 确定 Role 模型
     if role_model is True:
-        # 动态创建 Role 类
+        # 动态创建 Role 类；须挂到本模块命名空间，否则 pickle（用户缓存快照）
+        # 报 Can't pickle <class 'yweb.auth.setup.Role'>: attribute lookup Role failed
         tablename = role_table_name or f"{table_prefix}role"
-        resolved_role = type("Role", (AbstractSimpleRole,), {
-            "__tablename__": tablename,
-            "__table_args__": {"extend_existing": True},
-        })
+        resolved_role = type(
+            "Role",
+            (AbstractSimpleRole,),
+            {
+                "__tablename__": tablename,
+                "__table_args__": {"extend_existing": True},
+                "__module__": __name__,
+            },
+        )
+        setattr(sys.modules[__name__], "Role", resolved_role)
         logger.info(f"动态创建角色模型: Role (table={tablename})")
     else:
         # 使用传入的自定义 Role
@@ -838,12 +846,18 @@ def _resolve_login_record_model(
     table_prefix = _detect_table_prefix(user_model)
     
     if login_record_model is True:
-        # 动态创建 LoginRecord 类
+        # 动态创建；注册到本模块，保证 pickle 能按 module.qualname 找回类
         tablename = login_record_table_name or f"{table_prefix}login_record"
-        resolved = type("LoginRecord", (AbstractLoginRecord,), {
-            "__tablename__": tablename,
-            "__table_args__": {"extend_existing": True},
-        })
+        resolved = type(
+            "LoginRecord",
+            (AbstractLoginRecord,),
+            {
+                "__tablename__": tablename,
+                "__table_args__": {"extend_existing": True},
+                "__module__": __name__,
+            },
+        )
+        setattr(sys.modules[__name__], "LoginRecord", resolved)
         logger.info(f"动态创建登录记录模型: LoginRecord (table={tablename})")
     else:
         # 使用传入的自定义 LoginRecord
@@ -954,6 +968,7 @@ def _create_jwt_manager(jwt_settings) -> JWTManager:
         return JWTManager(
             secret_key=jwt_conf.secret_key,
             algorithm=jwt_conf.algorithm,
+            key_id=getattr(jwt_conf, 'key_id', None),
             access_token_expire_minutes=jwt_conf.access_token_expire_minutes,
             refresh_token_expire_days=jwt_conf.refresh_token_expire_days,
             refresh_token_sliding_days=getattr(jwt_conf, 'refresh_token_sliding_days', 2),
@@ -967,6 +982,7 @@ def _create_jwt_manager(jwt_settings) -> JWTManager:
         return JWTManager(
             secret_key=jwt_settings.secret_key,
             algorithm=getattr(jwt_settings, 'algorithm', 'HS256'),
+            key_id=getattr(jwt_settings, 'key_id', None),
             access_token_expire_minutes=getattr(jwt_settings, 'access_token_expire_minutes', 30),
             refresh_token_expire_days=getattr(jwt_settings, 'refresh_token_expire_days', 7),
             refresh_token_sliding_days=getattr(jwt_settings, 'refresh_token_sliding_days', 2),

@@ -26,3 +26,7 @@ globs: **/api/**/*.py, **/services/**/*.py, **/domain/**/*.py
 - 统一使用 `Resp.OK()` / `Resp.BadRequest()` / `Resp.NotFound()` 响应
 - 异常统一捕获 `ValueError`，转为 `Resp.BadRequest()`
 - 简单纯查询可由 API 层直接调用模型，无需经过 Service
+- **async 安全（重要）**：涉及 ORM 调用的路由**优先用 `def`**（FastAPI 自动放线程池）；若路由必须 `async def`（需要 await 其他异步操作），ORM 调用必须用 `await async_db_call(...)` 包装，**禁止**在 `async def` 中直接调 ORM
+- **ResourceController 运行时依赖绑定（强制）**：路由集合固定但 model/service/scheduler 由应用装配层传入时，模块必须暴露 `create_xxx_router(...)`，并在工厂内调用 `Controller.create_router(name=value)`；禁止 `_xxx_model`、`_scheduler`、`_acl_service` 这类模块级注入状态，禁止 `init_xxx_controller(...)`
+- **可选能力组（强制）**：某一组 API 是否挂载取决于配置时，按能力组拆成独立 `ResourceController`，在 `create_xxx_router(...)` 工厂层用 `if xxx: include_router(...)` 条件挂载；相关小 controller 可以放在同一个 `.py` 文件里，用外层 `include_router(prefix=...)` + controller `prefix` 保持 URL 不变；不要在大 controller 内用运行时 `if/else` 隐藏端点是否存在，也不要使用隐藏式 `lambda/when/build` 作为默认规范
+- **显式 prefix（强制）**：每个 `ResourceController` 必须显式声明 `prefix`，不得省略或依赖默认值；没有额外前缀时也必须写 `prefix = ""`

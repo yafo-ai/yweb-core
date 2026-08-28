@@ -187,6 +187,7 @@ yweb-core/
 │   ├── auth/                 # 认证（JWT 双 Token、setup_auth 一键启用）
 │   ├── permission/           # 权限（RBAC、角色继承）
 │   ├── organization/         # 组织管理（setup_organization 一键启用）
+│   ├── agent/                # Agent 相关基础能力（command 协议子模块）
 │   ├── cache/                # 缓存（@cached 装饰器、自动失效）
 │   ├── scheduler/            # 定时任务（Cron / Interval / Once、Builder 模式）
 │   ├── response/             # 统一响应（Resp 快捷类、DTO）
@@ -199,6 +200,7 @@ yweb-core/
 │   └── utils/                # 工具（加密、文件大小解析）
 ├── docs/                     # 文档
 ├── tests/                    # 测试
+│   ├── test_agent_command/   # Agent 内部工具调用协议测试（解析/DSL/构建/格式说明）
 │   ├── test_auth/            # 认证模块测试
 │   ├── test_cache/           # 缓存模块测试
 │   ├── test_config/          # 配置模块测试
@@ -422,7 +424,7 @@ logging.getLogger("sqlalchemy.engine").setLevel(logging.INFO)
 
 ```python
 # 导入 ORM 相关
-from yweb.orm import BaseModel, init_database, get_db
+from yweb.orm import BaseModel, init_database, get_db, async_db_call
 
 # 导入响应相关
 from yweb.response import OK, BadRequest, NotFound
@@ -436,6 +438,35 @@ from yweb.log import setup_logger, api_logger
 # 导入配置
 from yweb.config import CoreSettings, load_yaml_config
 ```
+
+### 异步路由注意事项
+
+ORM 基于同步 Session，在 `async def` 路由中直接调用会阻塞事件循环。框架内置异步安全检测，
+会自动拦截并给出修复指引：
+
+```python
+# ✅ 纯 DB 操作：使用 def 路由（FastAPI 自动放线程池）
+@app.get("/users")
+def list_users():
+    return User.query.all()
+
+# ✅ 混合 async I/O：使用 async_db_call() 包装
+from yweb.orm import async_db_call
+
+@app.get("/users")
+async def list_users():
+    users = await async_db_call(User.get_all)
+    extra = await some_async_call()
+    return {"users": users, "extra": extra}
+
+# ❌ 会触发 SynchronousOnlyOperation
+@app.get("/users")
+async def list_users():
+    return User.query.all()
+```
+
+通过环境变量 `YWEB_ASYNC_SAFETY` 控制检测行为：`error`（默认）/ `warn` / `off`。
+详见 [数据库会话文档](docs/orm_docs/12_db_session.md) 的「异步路由与同步 ORM」章节。
 
 详细使用说明请参考 `PROJECT_SUMMARY.md` 或 `docs/` 目录下的文档。
 

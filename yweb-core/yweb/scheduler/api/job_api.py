@@ -13,6 +13,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Query
 
+from yweb.controller import ResourceController, get, post
 from yweb.response import Resp
 from yweb.orm import DTO
 
@@ -38,20 +39,26 @@ class RunJobResponse(DTO):
     job_code: str = ""
 
 
-def create_job_router(scheduler) -> APIRouter:
-    """创建任务管理路由
+class JobController(ResourceController):
+    """任务管理控制器。
 
-    Args:
-        scheduler: Scheduler 实例
-
-    Returns:
-        APIRouter
+    生成路由（prefix=/jobs）：
+        GET  /jobs/list    获取所有任务
+        GET  /jobs/get     获取任务详情
+        POST /jobs/run     立即执行任务
+        POST /jobs/pause   暂停任务
+        POST /jobs/resume  恢复任务
+        POST /jobs/delete  删除任务
     """
-    router = APIRouter()
 
-    @router.get("/jobs/list", summary="获取所有任务")
-    def list_jobs():
+    prefix = "/jobs"
+    tags = ["Scheduler"]
+    scheduler = None
+
+    @get(summary="获取所有任务")
+    def list(self):
         """获取所有注册的任务列表"""
+        scheduler = self.scheduler
         jobs = scheduler.get_jobs()
         return Resp.OK(data=[
             JobResponse.from_dict(j)
@@ -59,21 +66,19 @@ def create_job_router(scheduler) -> APIRouter:
             if not j.get("parent_code")  # 排除子任务
         ])
 
-    @router.get("/jobs/get", summary="获取任务详情")
-    def get_job(
-        code: str = Query(..., description="任务编码"),
-    ):
+    @get(summary="获取任务详情")
+    def get(self, code: str = Query(..., description="任务编码")):
         """获取指定任务的详细信息"""
+        scheduler = self.scheduler
         job = scheduler.get_job(code)
         if not job:
             return Resp.NotFound(message=f"任务 {code} 不存在")
         return Resp.OK(data=JobResponse.from_dict(job))
 
-    @router.post("/jobs/run", summary="立即执行任务")
-    def run_job(
-        code: str = Query(..., description="任务编码"),
-    ):
+    @post(summary="立即执行任务")
+    def run(self, code: str = Query(..., description="任务编码")):
         """立即执行指定任务（不影响正常调度）"""
+        scheduler = self.scheduler
         run_id = scheduler.run_job(code)
         if not run_id:
             return Resp.NotFound(message=f"任务 {code} 不存在")
@@ -82,34 +87,41 @@ def create_job_router(scheduler) -> APIRouter:
             message="任务已触发",
         )
 
-    @router.post("/jobs/pause", summary="暂停任务")
-    def pause_job(
-        code: str = Query(..., description="任务编码"),
-    ):
+    @post(summary="暂停任务")
+    def pause(self, code: str = Query(..., description="任务编码")):
         """暂停指定任务"""
+        scheduler = self.scheduler
         result = scheduler.pause_job(code)
         if not result:
             return Resp.NotFound(message=f"任务 {code} 不存在或暂停失败")
         return Resp.OK(message=f"任务 {code} 已暂停")
 
-    @router.post("/jobs/resume", summary="恢复任务")
-    def resume_job(
-        code: str = Query(..., description="任务编码"),
-    ):
+    @post(summary="恢复任务")
+    def resume(self, code: str = Query(..., description="任务编码")):
         """恢复暂停的任务"""
+        scheduler = self.scheduler
         result = scheduler.resume_job(code)
         if not result:
             return Resp.NotFound(message=f"任务 {code} 不存在或恢复失败")
         return Resp.OK(message=f"任务 {code} 已恢复")
 
-    @router.post("/jobs/delete", summary="删除任务")
-    def delete_job(
-        code: str = Query(..., description="任务编码"),
-    ):
+    @post(summary="删除任务")
+    def delete(self, code: str = Query(..., description="任务编码")):
         """删除指定任务"""
+        scheduler = self.scheduler
         result = scheduler.remove_job(code)
         if not result:
             return Resp.NotFound(message=f"任务 {code} 不存在")
         return Resp.OK(message=f"任务 {code} 已删除")
 
-    return router
+
+def create_job_router(scheduler) -> APIRouter:
+    """创建任务管理路由（注入 scheduler 后返回 JobController 路由）。
+
+    Args:
+        scheduler: Scheduler 实例
+
+    Returns:
+        APIRouter
+    """
+    return JobController.create_router(scheduler=scheduler)

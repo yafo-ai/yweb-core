@@ -6,6 +6,7 @@
 import pytest
 from types import SimpleNamespace
 from datetime import timedelta
+from jose import jwt as jose_jwt
 
 from yweb.auth import (
     JWTManager,
@@ -82,6 +83,22 @@ class TestJWTManager:
         assert token is not None
         assert isinstance(token, str)
         assert token.count('.') == 2
+
+    def test_create_tokens_include_key_id_in_header_when_configured(self, jwt_secret_key, sample_token_payload):
+        """测试配置 key_id 后，签发令牌 header 包含 kid"""
+        manager = JWTManager(
+            secret_key=jwt_secret_key,
+            algorithm="HS256",
+            access_token_expire_minutes=30,
+            refresh_token_expire_days=7,
+            key_id="test-key-1",
+        )
+
+        access_token = manager.create_access_token(sample_token_payload)
+        refresh_token = manager.create_refresh_token(sample_token_payload)
+
+        assert jose_jwt.get_unverified_header(access_token)["kid"] == "test-key-1"
+        assert jose_jwt.get_unverified_header(refresh_token)["kid"] == "test-key-1"
     
     def test_verify_access_token(self, jwt_manager, sample_token_payload):
         """测试验证访问令牌"""

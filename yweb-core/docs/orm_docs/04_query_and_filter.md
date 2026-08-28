@@ -440,6 +440,33 @@ users = User.query.filter(User.id == 1).first()
 users = User.query.filter(User.bio.like("%keyword%")).all()
 ```
 
+## async 路由下的查询写法
+
+本章所有示例都是**同步写法**，在 `def` 路由、脚本、线程池任务中原样可用。
+
+在 `async def` 路由里，需要使用 `async_db_call()` 包装同步查询：
+
+```python
+# 同步路由 / def 路由（本章原始写法）
+users = User.query.filter(User.is_active.is_(True)).all()
+first = User.query.filter_by(email=email).first()
+total = User.query.count()
+
+# async 路由：使用 async_db_call 包装
+from yweb.orm import async_db_call
+
+users = await async_db_call(
+    lambda: User.query.filter(User.is_active.is_(True)).all()
+)
+first = await async_db_call(
+    lambda: User.query.filter_by(email=email).first()
+)
+total = await async_db_call(lambda: User.query.count())
+```
+
+详见 [15_FastAPI 集成 · async def vs def 路由](15_fastapi_integration.md#async-def-vs-def-路由重要)
+和 [12_数据库会话 · 推荐方式](12_db_session.md#推荐方式)。
+
 ## 下一步
 
 - [05_分页查询](05_pagination.md) - 学习分页功能

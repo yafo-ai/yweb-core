@@ -1,0 +1,644 @@
+# ResourceController 类视图指南
+
+以「一个类 = 一个资源」的方式组织 API，方法名即路由动作，零装饰器、约定优于配置。
+
+---
+
+## 目录
+
+1. [为什么用 ResourceController](#1-为什么用-resourcecontroller)
+2. [基础用法](#2-基础用法)
+3. [HTTP 方法约定](#3-http-方法约定)
+4. [路径分层组合](#4-路径分层组合)
+5. [依赖注入](#5-依赖注入)
+6. [运行时依赖绑定](#6-运行时依赖绑定)
+7. [自动扫描注册](#7-自动扫描注册)
+8. [与函数式路由共存](#8-与函数式路由共存)
+9. [完整项目示例](#9-完整项目示例)
+10. [注意事项](#10-注意事项)
+
+---
+
+## 1. 为什么用 ResourceController
+
+### 现状：函数式路由
+
+```python
+connector_router = APIRouter(prefix="/api/v1/connector")
+
+@connector_router.get("/list")
+async def list_connectors(): ...
+
+@connector_router.post("/create")
+async def create_connector(body: CreateRequest): ...
+
+@connector_router.post("/delete")
+async def delete_connector(body: DeleteRequest): ...
+```
+
+问题：每个方法都要重复 `@router.method("/action")` 装饰器，同一资源的端点散落各处，无法在类层面共享依赖。
+
+### ResourceController 方式
+
+```python
+from yweb.controller import ResourceController, get
+
+class ConnectorController(ResourceController):
+    prefix = "/connector"
+    tags = ["连接器"]
+
+    @get
+    async def list(self, page: int = 1):
+        return Resp.OK(ConnectorService.list(page))
+
+    async def create(self, body: CreateRequest):
+        return Resp.OK(ConnectorService.create(body))
+
+    async def delete(self, body: DeleteRequest):
+        ConnectorService.delete(body.id)
+        return Resp.OK()
+```
+
+- 方法名即路由路径（`create` → `/create`）
+- 默认 POST，`@get` 标记 GET
+- 类定义完成时自动生成 `APIRouter`
+
+---
+
+## 2. 基础用法
+
+### 最小示例
+
+```python
+from yweb.controller import ResourceController, get
+
+class ItemController(ResourceController):
+    prefix = "/item"
+    tags = ["项目管理"]
+
+    @get
+    async def list(self, page: int = 1, size: int = 10):
+        """获取项目列表"""
+        items = ItemModel.paginate(page=page, per_page=size)
+        return Resp.OK(ItemDTO.from_page(items))
+
+    @get
+    async def get(self, item_id: int):
+        """获取项目详情"""
+        item = ItemModel.get_or_404(item_id)
+        return Resp.OK(ItemDTO.from_entity(item))
+
+    async def create(self, body: CreateItemRequest):
+        """创建项目"""
+        item = ItemService.create(body)
+        return Resp.OK(ItemDTO.from_entity(item))
+
+    async def update(self, body: UpdateItemRequest):
+        """更新项目"""
+        item = ItemService.update(body)
+        return Resp.OK(ItemDTO.from_entity(item))
+
+    async def delete(self, body: DeleteRequest):
+        """删除项目"""
+        ItemService.delete(body.id)
+        return Resp.OK()
+```
+
+### 挂载到应用
+
+```python
+from fastapi import FastAPI
+
+app = FastAPI()
+app.include_router(ItemController.router, prefix="/api/v1")
+# → GET  /api/v1/item/list
+# → GET  /api/v1/item/get
+# → POST /api/v1/item/create
+# → POST /api/v1/item/update
+# → POST /api/v1/item/delete
+```
+
+---
+
+## 3. HTTP 方法约定
+
+| 规则 | 说明 |
+|------|------|
+| 默认 POST | 所有 public 方法默认注册为 POST |
+| `@get` 标记 | 需要 GET 的方法用 `@get` 装饰器 |
+| `@post` / `@route` | 显式声明 POST 或其他方法，并可附带路由元数据（见下） |
+| `_` 开头 = 私有 | 下划线开头的方法不注册为路由 |
+
+```python
+class MyController(ResourceController):
+    prefix = "/my"
+
+    @get
+    async def list(self): ...        # → GET /my/list
+
+    async def create(self): ...      # → POST /my/create（默认）
+
+    def _helper(self): ...           # → 不注册，私有辅助方法
+```
+
+**为什么默认 POST**：实际业务中 80% 以上的接口是写操作（create、update、delete、submit、approve...），只有少量读操作需要 GET。默认 POST 让大多数方法零配置。
+
+### 装饰器与路由元数据
+
+`@get` / `@post` 既可裸用，也可带参数声明路由元数据；`@route` 是显式指定方法的通用形式（仅允许 GET/POST）。支持的关键字与 FastAPI `APIRouter.get/post` 一致（`response_model`、`status_code`、`dependencies`、`summary`、`description`、`responses`、`deprecated` 等）。
+
+```python
+from yweb.controller import ResourceController, get, post
+
+class ItemController(ResourceController):
+    prefix = "/item"
+
+    @get(response_model=PageResponse[ItemDTO], summary="项目列表")
+    async def list(self, page: int = 1): ...
+
+    @post(response_model=ItemResponse[ItemDTO], status_code=201)
+    async def create(self, body: CreateItemRequest): ...
+
+    @post(dependencies=[require_role("admin")])      # 方法级依赖
+    async def delete(self, body: DeleteRequest): ...
+```
+
+- `dependencies` 中的可调用对象会自动包装为 `Depends(...)`，也可直接传 `Depends(...)`。
+- 未声明 `summary` 时，自动回退到方法 docstring 第一行。
+- `path=` 可覆盖默认的 `/方法名` 路径，用于方法名无法表达的路径（如连字符）：
+
+```python
+@post(path="/reset-password")          # → POST .../reset-password（而非 /reset_password）
+async def reset_password(self, body: ResetPasswordRequest): ...
+```
+
+---
+
+## 4. 路径分层组合
+
+ResourceController 利用 FastAPI 原生的 `include_router(prefix=...)` 嵌套机制分层组合路径。**目录层级与 URL 路径一一对应**：
+
+```
+拼接公式（与目录层级一一对应）：
+
+目录层级:    app / api / v1  / workflow / template.py → create()
+               │        │         │           │            │
+URL 路径:      │   /api/v1    /workflow    /template     /create
+               │   ─────┬─   ────┬────   ─────┬────   ───┬───
+               │   全局前缀    模块前缀     prefix       方法名
+               │
+               └── 最终: POST /api/v1/workflow/template/create
+```
+
+### 推荐目录结构
+
+```
+app/
+├── main.py
+└── api/
+    └── v1/                              ← 全局前缀 "/api/v1"，目录体现版本
+        ├── __init__.py                  ← v1_router, API_PREFIX = "/api/v1"
+        ├── workflow/                     ← 模块前缀 "/workflow"
+        │   ├── __init__.py              ← workflow_router = APIRouter(prefix="/workflow")
+        │   ├── template.py              ← prefix = "/template"
+        │   ├── template_form.py         ← prefix = "/template/form"
+        │   ├── template_node.py         ← prefix = "/template/node"
+        │   └── instance.py              ← prefix = "/instance"
+        ├── acl/                          ← 模块前缀 "/acl"
+        │   ├── __init__.py              ← acl_router = APIRouter(prefix="/acl")
+        │   ├── rules.py                 ← prefix = "/rules"
+        │   └── resources.py             ← prefix = "/resources/inheritance"
+        ├── connector/                    ← 模块前缀 "/connector"
+        │   ├── __init__.py              ← connector_router = APIRouter(prefix="/connector")
+        │   └── connector.py             ← prefix = ""（无额外前缀）
+        ├── org/                          ← 模块前缀 "/org"
+        │   ├── __init__.py              ← org_router = APIRouter(prefix="/org")
+        │   ├── user.py                  ← prefix = "/user"
+        │   └── department.py            ← prefix = "/department"
+        └── ai/                           ← 模块前缀 "/ai"
+            ├── __init__.py              ← ai_router = APIRouter(prefix="/ai")
+            └── chat.py                  ← prefix = ""
+```
+
+### 模块级路由组织
+
+```python
+# app/api/v1/workflow/__init__.py
+from fastapi import APIRouter
+
+workflow_router = APIRouter(prefix="/workflow", tags=["工作流"])
+workflow_router.include_router(TemplateController.router)
+workflow_router.include_router(InstanceController.router)
+```
+
+### 应用级挂载
+
+```python
+# app/main.py
+app.include_router(workflow_router, prefix="/api/v1")
+app.include_router(connector_router, prefix="/api/v1")
+```
+
+### 嵌套资源
+
+```python
+class TemplateController(ResourceController):
+    prefix = "/template"
+    async def create(self): ...           # → POST /api/v1/workflow/template/create
+
+class TemplateNodeController(ResourceController):
+    prefix = "/template/node"
+    async def create(self): ...           # → POST /api/v1/workflow/template/node/create
+```
+
+### 空 prefix（模块本身就是资源）
+
+```python
+class ConnectorController(ResourceController):
+    prefix = ""                           # 无额外前缀
+    async def list(self): ...             # → GET /api/v1/connector/list
+```
+
+---
+
+## 5. 依赖注入
+
+### 类级 dependencies（Router 级）
+
+所有方法共享的前置守卫通过 `dependencies` 类属性声明：
+
+```python
+from yweb.auth import setup_auth
+
+auth = setup_auth(User)
+
+class ProtectedController(ResourceController):
+    prefix = "/admin"
+    dependencies = [auth.get_current_user]  # 所有方法都需要登录
+
+    async def dashboard(self): ...
+    async def settings(self): ...
+```
+
+### 方法级 Depends（FastAPI 原生）
+
+特定方法的额外依赖直接写在参数中：
+
+```python
+from fastapi import Depends
+
+class OrderController(ResourceController):
+    prefix = "/order"
+
+    async def create(self, body: CreateOrderRequest, user=Depends(auth.get_current_user)):
+        order = OrderService.create(body, operator=user)
+        return Resp.OK(OrderDTO.from_entity(order))
+
+    @get
+    async def list(self, page: int = 1):
+        # 这个方法不需要登录
+        return Resp.OK(OrderService.list(page))
+```
+
+---
+
+## 6. 运行时依赖绑定
+
+当 controller 依赖的 model、service、scheduler 等对象需要在 `create_xxx_router(...)` 被调用时才能确定，必须通过 `ResourceController.create_router(...)` 生成独立 router。
+
+```python
+from typing import Type
+
+from fastapi import APIRouter, Query
+
+from yweb.controller import ResourceController, get
+from yweb.response import Resp, PageResponse
+
+
+class LoginRecordController(ResourceController):
+    prefix = ""
+    tags = ["登录记录"]
+    login_record_model = None
+
+    @get(response_model=PageResponse[LoginRecordItem], summary="查询登录记录")
+    def list(
+        self,
+        username: str | None = Query(None, description="用户名，支持模糊查询"),
+        page: int = Query(1, ge=1),
+        page_size: int = Query(10, ge=1, le=100),
+    ):
+        model = self.login_record_model
+        query = model.query.order_by(model.created_at.desc())
+        if username:
+            query = query.filter(model.username.ilike(f"%{username}%"))
+        return Resp.OK(LoginRecordItem.from_page(query.paginate(page=page, page_size=page_size)))
+
+
+def create_login_record_router(login_record_model: Type[AbstractLoginRecord]) -> APIRouter:
+    return LoginRecordController.create_router(login_record_model=login_record_model)
+```
+
+强制规范：
+
+| 规则 | 要求 |
+|------|------|
+| 运行时依赖 | 必须通过 `Controller.create_router(name=value)` 绑定 |
+| 对外入口 | 模块应暴露 `create_xxx_router(...)`，由它接收运行时依赖并返回 `APIRouter` |
+| 禁止模块级注入状态 | 不允许用 `_xxx_model`、`_scheduler`、`_acl_service` 这类模块变量承载 router 工厂传入的依赖 |
+| 禁止初始化函数注入 | 不允许新增 `init_xxx_controller(...)` 再修改全局变量或 controller 类变量 |
+| 显式 prefix | 每个 `ResourceController` 必须显式声明 `prefix`，不得省略或依赖默认值；模块本身就是资源时也必须写 `prefix = ""` |
+| 挂载方式 | 使用运行时依赖的 controller 只能挂载 `create_xxx_router(...)` 的返回值，不应直接挂 `Controller.router` |
+| 自动扫描 | 使用运行时依赖的 controller 不走 `scan_controllers`，因为扫描阶段无法知道依赖值 |
+| 请求状态 | 当前请求相关的数据仍然放在方法局部变量、参数或 FastAPI `Depends` 中，不放到 class attribute 上 |
+
+`create_router(...)` 每次都会生成一份绑定了属性的 controller 子类和独立 `APIRouter`。这些绑定属性属于该 router，不会因为另一个 router 再次绑定而被覆盖。下划线开头的实例方法仍然可以作为内部 helper 使用，不会被注册为 API。
+
+### 可选能力组
+
+如果某一组 API 是否存在取决于运行时配置，不要把条件藏到 controller 方法里，也不要为了条件注册引入额外的 `when/lambda` 机制。优先把可选能力拆成独立 controller，由 router 工厂决定是否 `include_router(...)`。
+
+多个 controller 可以放在同一个 `.py` 文件中；拆分的是能力边界，不一定是文件边界。最终路径由 FastAPI 原生前缀组合得到：
+
+```text
+最终路径 = 应用/总路由 prefix + include_router prefix + controller prefix + 方法路径
+```
+
+`prefix = ""` 表示这个 controller 不额外增加路径层级，只使用外层 `include_router(prefix=...)` 提供的资源路径。
+
+```python
+class PermissionController(ResourceController):
+    prefix = ""
+    permission_model = None
+
+    @get(response_model=PageResponse[PermissionItem])
+    def list(self): ...
+
+
+class APIResourceController(ResourceController):
+    prefix = ""
+    api_resource_model = None
+    permission_model = None
+
+    @get(response_model=PageResponse[APIResourceItem])
+    def list(self): ...
+
+
+def create_permission_router(permission_model, api_resource_model=None) -> APIRouter:
+    router = APIRouter(prefix="/permission")
+    router.include_router(
+        PermissionController.create_router(permission_model=permission_model),
+        prefix="/permissions",
+    )
+
+    if api_resource_model:
+        router.include_router(
+            APIResourceController.create_router(
+                api_resource_model=api_resource_model,
+                permission_model=permission_model,
+            ),
+            prefix="/api-resources",
+        )
+
+    return router
+```
+
+这样 `api_resource_model` 未传入时，`/api-resources/*` 不会注册，Swagger 也不会显示这组接口；传入后才注册。这个写法保留 FastAPI 原生的条件挂载语义，同时让每组 API 的实现保持类视图结构。
+
+拆分后的 controller 仍然可以共享同一个外层前缀来保持 URL 不变：
+
+```python
+class DepartmentController(ResourceController):
+    prefix = ""
+
+    @get(response_model=PageResponse[DepartmentItem])
+    def list(self): ...
+
+
+class DepartmentEmployeeController(ResourceController):
+    prefix = "/employees"
+
+    @get(response_model=PageResponse[EmployeeItem])
+    def list(self): ...
+
+
+def create_department_router(dept_model, employee_model=None) -> APIRouter:
+    router = APIRouter(prefix="/departments")
+    router.include_router(
+        DepartmentController.create_router(dept_model=dept_model),
+    )
+
+    if employee_model:
+        router.include_router(
+            DepartmentEmployeeController.create_router(employee_model=employee_model),
+        )
+
+    return router
+```
+
+对应路径：
+
+```text
+/departments/list
+/departments/employees/list
+```
+
+这比在一个大 controller 内部散落运行时 `if/else` 更清晰：controller 只声明固定端点，工厂层负责根据配置组装能力。
+
+---
+
+## 7. 自动扫描注册
+
+对于约定式项目结构，可以用 `scan_controllers` 一行完成所有控制器的注册：
+
+```python
+from yweb.controller import scan_controllers
+
+app = FastAPI()
+scan_controllers(app, package="app.api.v1", prefix="/api/v1")
+```
+
+`scan_controllers` 会递归扫描指定包下所有 `ResourceController` 子类，自动调用 `app.include_router(controller.router, prefix=prefix)`。
+
+适合项目目录结构已经与 URL 路径对应的场景。
+
+如果 controller 依赖运行时传入的 model/service/scheduler，必须使用第 6 节的 `create_xxx_router(...)` 工厂手动挂载，不纳入自动扫描。
+
+---
+
+## 8. 与函数式路由共存
+
+ResourceController 和函数式路由可以在同一项目中共存。两者都是标准的 `APIRouter`：
+
+```python
+# 类视图
+class UserController(ResourceController):
+    prefix = "/user"
+    async def create(self, body: CreateUserRequest): ...
+
+# 函数式（特殊端点）
+special_router = APIRouter()
+
+@special_router.post("/webhook/github")
+async def github_webhook(request: Request): ...
+
+# 统一挂载
+app.include_router(UserController.router, prefix="/api/v1")
+app.include_router(special_router, prefix="/api/v1")
+```
+
+**选择建议**：
+
+| 场景 | 推荐方式 |
+|------|---------|
+| 标准 CRUD 资源（大多数业务接口） | ResourceController |
+| 需要 `response_model` / `status_code` / 方法级依赖 | ResourceController（用 `@get`/`@post` 传参，见第 3 节） |
+| 路由集合固定，但 model/service/scheduler 运行时传入 | ResourceController + `create_xxx_router(...)` + `Controller.create_router(...)` |
+| 某一组可选 API 运行时才决定是否挂载 | 独立 ResourceController + 工厂层条件 `include_router(...)`；可同文件多 controller |
+| 特殊协议端点（webhook、OAuth callback） | 函数式路由 |
+| 多个方法各自有运行时开关 | 优先按能力组拆成多个 ResourceController，再由工厂层条件挂载 |
+| 拆分后明显更难读、或协议路径强约束 | 函数式路由 |
+| 需要 RESTful 路径参数（`/{id}`）或 PUT/DELETE/PATCH | 函数式路由 |
+| 新项目、从零开始 | ResourceController |
+
+---
+
+## 9. 完整项目示例
+
+### 目录结构
+
+```
+app/
+├── main.py
+└── api/
+    └── v1/
+        ├── __init__.py              # v1_router
+        ├── workflow/
+        │   ├── __init__.py          # workflow_router = APIRouter(prefix="/workflow")
+        │   ├── template.py          # TemplateController, prefix="/template"
+        │   └── instance.py          # InstanceController, prefix="/instance"
+        ├── connector/
+        │   ├── __init__.py          # connector_router = APIRouter(prefix="/connector")
+        │   └── connector.py         # ConnectorController, prefix=""
+        └── org/
+            ├── __init__.py          # org_router = APIRouter(prefix="/org")
+            ├── user.py              # UserController, prefix="/user"
+            └── department.py        # DepartmentController, prefix="/department"
+```
+
+### 控制器代码
+
+```python
+# app/api/v1/connector/connector.py
+
+from yweb import Resp
+from yweb.controller import ResourceController, get
+from fastapi import Depends, Query
+
+from app.services.connector import ConnectorService
+from app.schemas.connector import CreateConnectorRequest, ConnectorDTO
+
+
+class ConnectorController(ResourceController):
+    prefix = ""
+    tags = ["连接器"]
+
+    @get
+    async def list(self, page: int = 1, size: int = 10):
+        """获取连接器列表"""
+        result = ConnectorService.list(page, size)
+        return Resp.OK(ConnectorDTO.from_page(result))
+
+    @get
+    async def get(self, connector_id: int = Query(...)):
+        """获取连接器详情"""
+        connector = ConnectorService.get(connector_id)
+        return Resp.OK(ConnectorDTO.from_entity(connector))
+
+    async def create(self, body: CreateConnectorRequest):
+        """创建连接器"""
+        connector = ConnectorService.create(body)
+        return Resp.OK(ConnectorDTO.from_entity(connector))
+
+    async def test(self, body: TestConnectorRequest):
+        """测试连接器连通性"""
+        result = ConnectorService.test(body)
+        return Resp.OK(result)
+```
+
+### 模块路由组织
+
+```python
+# app/api/v1/connector/__init__.py
+
+from fastapi import APIRouter
+from .connector import ConnectorController
+
+connector_router = APIRouter(prefix="/connector", tags=["连接器"])
+connector_router.include_router(ConnectorController.router)
+```
+
+### 应用入口
+
+```python
+# app/main.py
+
+from fastapi import FastAPI
+from app.api.v1.connector import connector_router
+from app.api.v1.workflow import workflow_router
+from app.api.v1.org import org_router
+
+app = FastAPI()
+
+API_PREFIX = "/api/v1"
+app.include_router(connector_router, prefix=API_PREFIX)
+app.include_router(workflow_router, prefix=API_PREFIX)
+app.include_router(org_router, prefix=API_PREFIX)
+```
+
+---
+
+## 10. 注意事项
+
+### OpenAPI 文档
+
+- 方法的 docstring 第一行自动成为 Swagger 的 `summary`
+- 参数的 type hints 自动生成请求体/查询参数的 Schema
+- `response_model` / `status_code` 通过 `@get`/`@post`/`@route` 传参声明（见第 3 节）
+- `tags` 类属性控制 Swagger 分组
+
+### 私有方法
+
+下划线开头的方法不参与路由注册，可作为辅助逻辑：
+
+```python
+class MyController(ResourceController):
+    prefix = "/my"
+
+    async def create(self, body: CreateRequest):
+        validated = self._validate(body)
+        return Resp.OK(Service.create(validated))
+
+    def _validate(self, body):
+        # 私有辅助，不会变成路由
+        ...
+```
+
+### 同步方法
+
+支持同步和异步方法，两者都能正常工作：
+
+```python
+class MyController(ResourceController):
+    prefix = "/my"
+
+    async def async_action(self): ...   # 异步，推荐
+    def sync_action(self): ...          # 同步，也支持
+```
+
+同步方法会生成同步端点，由 FastAPI 自动调度到线程池执行。因此**直接调用同步 ORM 的方法应写成同步 `def`**（避免在事件循环中触发 async-safety 检测）；异步方法中如需同步数据库操作，请用 `async_db_call(...)` 包装。
+
+### 每次请求创建新实例
+
+ResourceController 是无状态的——每次请求创建一个新的类实例。不要在实例上存储跨请求状态。
+
+通过 `create_router(...)` 绑定的 model/service/scheduler 是 router 级配置，不是请求状态；它们应当是稳定的依赖引用。请求过程中产生的数据必须放在方法局部变量、参数或 FastAPI `Depends` 中。

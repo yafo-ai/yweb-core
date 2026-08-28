@@ -67,6 +67,9 @@ from .backends import MemoryBackend, RedisBackend, CacheBackend
 
 logger = get_logger("yweb.cache")
 
+# Memory+ORM 快照失败哨兵：调用方跳过 set，避免把会被 expire_on_commit 掏空的活引用写入缓存
+_SNAPSHOT_FAILED = object()
+
 _SENSITIVE_KEYWORDS = (
     "password",
     "secret",
@@ -468,11 +471,12 @@ class CachedFunction:
         )
         result = self._func(*args, **kwargs)
         
-        # 只缓存非 None 结果
+        # 只缓存非 None 且快照成功的结果
         if result is not None:
             cache_value = self._snapshot_for_cache(result)
-            self._backend.set(cache_key, cache_value, self._ttl)
-            self._track_deps(cache_key, result)
+            if cache_value is not _SNAPSHOT_FAILED:
+                self._backend.set(cache_key, cache_value, self._ttl)
+                self._track_deps(cache_key, result)
         
         return result
     
@@ -498,6 +502,7 @@ class CachedFunction:
         副本不在任何 Session 中，expire_on_commit 无法影响。
         
         仅在 Memory 后端 + orm_model 时启用；Redis 后端自身的序列化已天然隔离。
+        快照失败返回 ``_SNAPSHOT_FAILED``，调用方跳过写入（禁止缓存活引用）。
         """
         if self._orm_model is None or not isinstance(self._backend, MemoryBackend):
             return obj
@@ -505,8 +510,11 @@ class CachedFunction:
             import pickle
             return pickle.loads(pickle.dumps(obj))
         except Exception as e:
-            logger.warning(f"Failed to snapshot ORM object for cache: {e}")
-            return obj
+            logger.warning(
+                "Failed to snapshot ORM object for cache (skip caching this value): %s",
+                e,
+            )
+            return _SNAPSHOT_FAILED
     
     def _ensure_session(self, obj: Any) -> Any:
         """将 detached ORM 对象 merge 回当前 Session

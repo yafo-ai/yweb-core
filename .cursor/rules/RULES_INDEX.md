@@ -15,9 +15,9 @@
 ## 后端（YWeb / Python）
 
 - `yweb-framework.mdc`
-  - yweb 框架总规范入口；提供 DDD、异常、事务、响应等总览。
+  - yweb 框架总规范入口；提供 DDD、ResourceController 运行时依赖绑定、可选能力组拆分、异常、事务、响应等总览。
 - `yweb-ddd-architecture.mdc`
-  - DDD 分层职责边界（API/Service/Domain）；瘦 API 原则。
+  - DDD 分层职责边界（API/Service/Domain）；瘦 API 原则；ResourceController 与可选能力组强制写法。
 - `yweb-orm.mdc`
   - ORM 模型定义、字段 comment、SQLAlchemy 2.0 风格、事务边界。
 - `yweb-auth.mdc`
@@ -27,7 +27,9 @@
 - `yweb-testing.mdc`
   - 测试编写与组织规范。
 - `yweb-webapi-response.mdc`（新增）
-  - WebAPI 响应规范：必须声明 `response_model`，DTO/Resp 统一写法，避免 `/docs` 出现 `string`。
+  - WebAPI 响应规范：必须声明 `response_model`，DTO/Resp 统一写法，ResourceController 也必须通过装饰器声明响应模型，避免 `/docs` 出现 `string`。
+- `yweb-agent-command.mdc`（新增）
+  - Agent 内部工具调用协议规范：指令 DSL（函数式 `item()`/`record()`/`@artifact()`）、解析/构建/格式说明生成。
 
 ## 前端（Vue / API 封装）
 
@@ -46,6 +48,7 @@
    - API 路由：`yweb-ddd-architecture.mdc` + `yweb-webapi-response.mdc`
    - ORM 模型：`yweb-orm.mdc`
    - 前端 API：`frontend-api-conventions.mdc`
+   - Agent 内部工具调用协议：`yweb-agent-command.mdc`
 3. 涉及测试时补看 `yweb-testing.mdc` 与 pytest 命名规则。
 
 ## 维护约定

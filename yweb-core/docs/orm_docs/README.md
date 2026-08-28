@@ -33,7 +33,7 @@
 |------|------|
 | [13_数据序列化](13_serialization.md) | to_dict、to_dict_with_relations、DTO |
 | [14_Schema与验证](14_schema_validation.md) | BaseSchemas、PaginationField、Pydantic集成 |
-| [15_FastAPI集成](15_fastapi_integration.md) | 依赖注入、路由示例、最佳实践 |
+| [15_FastAPI集成](15_fastapi_integration.md) | 依赖注入、async/def 路由选择、路由示例、最佳实践 |
 
 ### 高级事务管理
 
@@ -55,7 +55,8 @@
 yweb/orm/
 ├── core_model.py           # 核心ORM模型类（CRUD、分页等）
 ├── base_model.py           # 业务模型基类（继承CoreModel）
-├── db_session.py           # 数据库会话管理
+├── db_session.py           # 数据库会话管理、async_db_call()
+├── async_safety.py         # 异步安全检测（SynchronousOnlyOperation）
 ├── history.py              # 版本历史记录
 ├── base_dto.py             # 数据传输对象
 ├── base_schemas.py         # Pydantic Schema、Page分页类
@@ -82,7 +83,7 @@ yweb/orm/
 | **序列化** | to_dict、关联序列化 | ✅ 完整实现 |
 | **值对象嵌入** | OwnsOne、OwnedType、嵌套/平铺序列化 | ✅ 完整实现 |
 | **会话管理** | scoped_session、依赖注入 | ✅ 完整实现 |
-
+| **异步安全** | async 上下文检测、async_db_call()、SynchronousOnlyOperation | ✅ 完整实现 |
 ## 快速开始
 
 ### 安装依赖

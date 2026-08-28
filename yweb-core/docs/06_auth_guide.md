@@ -458,7 +458,7 @@ class MyAuthService(BaseAuthService):
 
 提供轻量级的角色管理，适用于只需"用户属于哪些角色"的简单场景。
 
-`yweb.permission.AbstractRole` 继承自 `AbstractSimpleRole`，如需升级到完整 RBAC（树形角色继承 + 权限管理），只需更换 Role 基类，`User.has_role()` / `User.role_codes` 等 API 保持不变。
+`yweb.rbac.AbstractRole` 继承自 `AbstractSimpleRole`，如需升级到完整 RBAC（树形角色继承 + 权限管理），只需更换 Role 基类，`User.has_role()` / `User.role_codes` 等 API 保持不变。
 
 ### 推荐方式：setup_auth(role_model=True)
 
@@ -1106,6 +1106,8 @@ def get_me(user=Depends(auth.get_current_user)):
 > **无需手动包装**：旧版框架需要自行编写 `get_current_user_with_blacklist` 包装函数，现在 `setup_auth(token_blacklist=True)` 自动完成，所有使用 `Depends(auth.get_current_user)` 的路由自动受保护。
 
 **完整示例：登出接口**
+
+`create_auth_router` 预置的 `POST /logout` 已按同一契约实现：必须携带当前 `Authorization: Bearer`，只撤销这一张访问令牌；不再接受 `user_id` 查询参数。撤销该用户全部令牌请走服务层 `auth_service.logout(user_id)`，或自行挂载需鉴权的管理端点。
 
 ```python
 @app.post("/auth/logout")

@@ -20,5 +20,9 @@ globs: yweb-core/yweb/orm/**/*.py, **/domain/**/entities.py, **/domain/**/model/
 5. **事务管理**：Service 层使用 `@transactional`，不在 Model 层管理事务
 6. **Active Record 方法**：`.add()` / `.update()` / `.delete()` / `.get()` / `.get_all()` / `.query`
 7. **模型层不关心 HTTP**：不返回 `Resp.*`、不抛 HTTP 相关异常
+8. **async 路由中使用 ORM**：在 `async def` 中直接访问 `Model.query` 会抛 `SynchronousOnlyOperation`。两种安全写法：
+   - **推荐**：使用 `def` 路由，FastAPI 自动放入线程池
+   - **需要混合 async I/O 时**：`await async_db_call(lambda: User.query.filter(...).all())`
+   启动/lifespan 中用 `with allow_sync():` 或 `db_session_scope()`（async 下可直接用，内部已自动 `allow_sync`）
 
 不确定时先阅读 `yweb-core/docs/03_orm_guide.md`。

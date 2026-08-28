@@ -1,0 +1,257 @@
+"""
+ACL 模块 - 权限判定引擎
+
+纯算法，只依赖 rule_model 和 resource_model（ORM 抽象模型）。
+不认识 User、Department、Role——调用者负责将用户转为身份标签集合。
+"""
+
+from typing import Optional
+
+from .enums import Effect
+
+
+class AclEngine:
+    """ACL 权限判定引擎
+
+    入参全部是基本类型（set[str]、str、int），不引入任何外部模块。
+
+    核心算法：
+    1. 从目标资源沿树向上收集所有相关规则
+    2. 按 DENY 优先 + 深度排序解析最终权限等级
+    """
+
+    def __init__(self, rule_model, resource_model):
+        self._rule_model = rule_model
+        self._resource_model = resource_model
+
+    def check(
+        self,
+        identities: set[str],
+        resource_type: str,
+        resource_id: str,
+        required_level: int,
+    ) -> bool:
+        """核心接口：这组身份对这个资源有没有指定等级的权限？"""
+        return (
+            self.get_effective_level(identities, resource_type, resource_id)
+            >= required_level
+        )
+
+    def get_effective_level(
+        self,
+        identities: set[str],
+        resource_type: str,
+        resource_id: str,
+    ) -> int:
+        """计算有效权限等级"""
+        rules = self._collect_rules(resource_type, resource_id)
+        return self._resolve(rules, identities)
+
+    def get_effective_level_with_source(
+        self,
+        identities: set[str],
+        resource_type: str,
+        resource_id: str,
+    ) -> tuple[int, list[dict]]:
+        """计算有效权限等级 + 命中的来源规则（供管理面权限矩阵 / 用户权限详情追溯来源）。
+
+        Returns:
+            (level, sources) ——
+            level 为有效等级（0=无权限或 DENY 命中）；
+            sources 为命中规则列表（按 depth 升序），每项含
+            rule_id / subject_id / subject_type / effect / permission_level / depth / inherit。
+            DENY 命中时 level=0、sources 仅含该 DENY 规则；
+            无匹配时 level=0、sources 为空列表。
+        """
+        rules = self._collect_rules(resource_type, resource_id)
+        return self._resolve_with_source(rules, identities)
+
+    def get_accessible(
+        self,
+        identities: set[str],
+        resource_type: Optional[str] = None,
+        min_level: int = 1,
+    ) -> list[str]:
+        """反向查询：这组身份能访问哪些资源（返回 resource_id 列表）
+
+        指定 resource_type 时：枚举该类型全部资源节点，逐个算有效等级。
+        复杂度跟资源数成正比，避免旧算法「对每个 inherit 父节点 get_descendants」
+        在主体挂大量规则时的 N+1 爆炸（例如数百条 user:X inherit 规则）。
+
+        未指定 resource_type 时：按规则直接命中的资源做候选（不做跨类型继承展开）。
+        """
+        if resource_type:
+            resources = (
+                self._resource_model.query.filter(
+                    self._resource_model.resource_type == resource_type,
+                    self._resource_model.deleted_at.is_(None),
+                ).all()
+            )
+            return [
+                r.resource_id
+                for r in resources
+                if self.get_effective_level(identities, resource_type, r.resource_id)
+                >= min_level
+            ]
+
+        # 未指定类型：仅按规则直接命中的资源做候选（与历史行为一致，不做跨类型继承展开）
+        rules = (
+            self._rule_model.query.filter(
+                self._rule_model.subject_id.in_(identities),
+                self._rule_model.deleted_at.is_(None),
+            ).all()
+        )
+        candidate_keys: set[tuple[str, str]] = {
+            (rule.resource_type, rule.resource_id) for rule in rules
+        }
+        result = []
+        for rt, rid in candidate_keys:
+            level = self.get_effective_level(identities, rt, rid)
+            if level >= min_level:
+                result.append(rid)
+        return result
+
+    def _collect_rules(
+        self, resource_type: str, resource_id: str
+    ) -> list[tuple]:
+        """从资源沿树向上遍历到根，收集所有 (rule, depth) 对
+
+        depth=0 表示直接规则，depth>0 表示从祖先继承。
+        遇到 inherit_parent=False 的节点就停止向上遍历。
+        """
+        resource_node = (
+            self._resource_model.query.filter(
+                self._resource_model.resource_type == resource_type,
+                self._resource_model.resource_id == resource_id,
+                self._resource_model.deleted_at.is_(None),
+            )
+            .first()
+        )
+
+        rules_with_depth: list[tuple] = []
+
+        if resource_node is None:
+            direct_rules = (
+                self._rule_model.query.filter(
+                    self._rule_model.resource_type == resource_type,
+                    self._rule_model.resource_id == resource_id,
+                    self._rule_model.deleted_at.is_(None),
+                )
+                .all()
+            )
+            for rule in direct_rules:
+                rules_with_depth.append((rule, 0))
+            return rules_with_depth
+
+        current = resource_node
+        depth = 0
+
+        while current is not None:
+            node_rules = (
+                self._rule_model.query.filter(
+                    self._rule_model.resource_type == current.resource_type,
+                    self._rule_model.resource_id == current.resource_id,
+                    self._rule_model.deleted_at.is_(None),
+                )
+                .all()
+            )
+
+            for rule in node_rules:
+                if depth == 0:
+                    rules_with_depth.append((rule, depth))
+                elif rule.inherit:
+                    rules_with_depth.append((rule, depth))
+
+            depth += 1
+
+            if current.parent_id is None:
+                break
+
+            parent = (
+                self._resource_model.query.filter(
+                    self._resource_model.id == current.parent_id,
+                    self._resource_model.deleted_at.is_(None),
+                )
+                .first()
+            )
+
+            if parent is None:
+                break
+            if not current.inherit_parent and depth > 0:
+                break
+
+            current = parent
+
+        return rules_with_depth
+
+    def _resolve(self, rules: list[tuple], identities: set[str]) -> int:
+        """DENY 优先 + 深度排序 → 最终等级
+
+        算法：
+        1. 过滤：只保留 subject_id 在 identities 中的规则
+        2. DENY 命中 → 返回 0
+        3. ALLOW 按深度升序排列（直接规则优先），取最高 permission_level
+        """
+        matched = []
+        for rule, depth in rules:
+            if rule.subject_id in identities:
+                matched.append((rule, depth))
+
+        for rule, _depth in matched:
+            if rule.effect == Effect.DENY:
+                return 0
+
+        if not matched:
+            return 0
+
+        matched.sort(key=lambda x: x[1])
+
+        max_level = 0
+        for rule, _depth in matched:
+            if rule.effect == Effect.ALLOW and rule.permission_level > max_level:
+                max_level = rule.permission_level
+
+        return max_level
+
+    def _resolve_with_source(
+        self, rules: list[tuple], identities: set[str]
+    ) -> tuple[int, list[dict]]:
+        """DENY 优先 + 深度排序 → 最终等级 + 命中规则来源（对齐 _resolve 逻辑，额外返回来源）。"""
+        matched: list[tuple] = []
+        for rule, depth in rules:
+            if rule.subject_id in identities:
+                matched.append((rule, depth))
+
+        for rule, depth in matched:
+            if rule.effect == Effect.DENY:
+                return 0, [_rule_to_source(rule, depth)]
+
+        if not matched:
+            return 0, []
+
+        matched.sort(key=lambda x: x[1])
+
+        max_level = 0
+        sources: list[dict] = []
+        for rule, depth in matched:
+            if rule.effect == Effect.ALLOW:
+                sources.append(_rule_to_source(rule, depth))
+                if rule.permission_level > max_level:
+                    max_level = rule.permission_level
+        return max_level, sources
+
+
+def _rule_to_source(rule, depth: int) -> dict:
+    """规则 ORM 对象 → 来源 dict（供管理面展示，不含敏感字段）。"""
+    return {
+        "rule_id": getattr(rule, "id", None),
+        "subject_id": rule.subject_id,
+        "subject_type": getattr(rule, "subject_type", None),
+        "effect": rule.effect,
+        "permission_level": rule.permission_level,
+        "depth": depth,
+        "inherit": bool(getattr(rule, "inherit", True)),
+    }
+
+
+__all__ = ["AclEngine"]

@@ -603,3 +603,51 @@ class TestDateChangeRollover:
         
         logger.removeHandler(handler)
         handler.close()
+
+    def test_size_rollover_survives_windows_file_lock(self, log_dir):
+        """Windows 文件占用时 size 轮转应走 copy 回退，不抛 Logging error。"""
+        import yweb.log.handlers as handlers_mod
+
+        log_file = os.path.join(log_dir, "lock_rollover_{date}.log")
+        handler = TimeAndSizeRotatingFileHandler(
+            filename=log_file,
+            maxBytes=200,
+            backupCount=3,
+        )
+        logger = logging.getLogger("test_lock_rollover")
+        logger.setLevel(logging.INFO)
+        logger.handlers.clear()
+        logger.propagate = False
+        logger.addHandler(handler)
+
+        logger.info("seed")
+        handler.flush()
+        assert os.path.exists(handler.baseFilename)
+
+        rename_calls = {"n": 0}
+        real_rename = os.rename
+
+        def rename_locked(src, dst):
+            rename_calls["n"] += 1
+            # 主文件首次轮转：模拟 WinError 32；备份链仍允许真实 rename
+            if src == handler.baseFilename or os.path.basename(src).startswith("lock_rollover_"):
+                if rename_calls["n"] <= 10:
+                    raise PermissionError(32, "另一个程序正在使用此文件")
+            return real_rename(src, dst)
+
+        with patch.object(handlers_mod.os, "rename", side_effect=rename_locked):
+            with patch.object(handlers_mod.time, "sleep", return_value=None):
+                # 写到触发 size 轮转
+                for i in range(20):
+                    logger.info("x" * 40 + f" {i}")
+                handler.flush()
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        backup = os.path.join(log_dir, f"lock_rollover_{today}.1.log")
+        assert os.path.exists(backup), "占用时仍应通过 copy 回退写出 .1 备份"
+        # 轮转后仍可继续写，不因 Logging error 中断
+        logger.info("after rollover")
+        handler.flush()
+
+        logger.removeHandler(handler)
+        handler.close()

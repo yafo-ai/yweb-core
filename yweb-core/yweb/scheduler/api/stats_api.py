@@ -12,6 +12,7 @@ from typing import Optional, List
 from fastapi import APIRouter, Query
 from pydantic import Field
 
+from yweb.controller import ResourceController, get, post
 from yweb.response import Resp
 from yweb.orm import DTO
 
@@ -36,27 +37,32 @@ class DashboardResponse(DTO):
     recent_failures: List[dict] = Field(default_factory=list)
 
 
-def create_stats_router(scheduler) -> APIRouter:
-    """创建统计与控制路由
+class StatsController(ResourceController):
+    """统计与控制控制器。
 
-    Args:
-        scheduler: Scheduler 实例
-
-    Returns:
-        APIRouter
+    生成路由（无额外 prefix）：
+        GET  /stats      获取调度器统计
+        GET  /dashboard  获取仪表板数据
+        POST /cleanup    清理过期历史
+        GET  /status     获取调度器状态
     """
-    router = APIRouter()
 
-    @router.get("/stats", summary="获取调度器统计")
-    def get_stats():
+    prefix = ""
+    tags = ["Scheduler"]
+    scheduler = None
+
+    @get(summary="获取调度器统计")
+    def stats(self):
         """获取调度器整体统计信息"""
+        scheduler = self.scheduler
         stats = scheduler.get_stats()
         return Resp.OK(data=StatsResponse.from_dict(stats))
 
-    @router.get("/dashboard", summary="获取仪表板数据")
-    def get_dashboard():
+    @get(summary="获取仪表板数据")
+    def dashboard(self):
         """获取仪表板概览数据"""
         default_data = DashboardResponse()
+        scheduler = self.scheduler
 
         try:
             history_manager = scheduler._get_history_manager()
@@ -68,9 +74,10 @@ def create_stats_router(scheduler) -> APIRouter:
         data = history_manager.get_dashboard_data()
         return Resp.OK(data=DashboardResponse.from_dict(data))
 
-    @router.post("/cleanup", summary="清理过期历史")
-    def cleanup_history(days: Optional[int] = Query(None, description="保留天数")):
+    @post(summary="清理过期历史")
+    def cleanup(self, days: Optional[int] = Query(None, description="保留天数")):
         """清理过期的历史记录和统计数据"""
+        scheduler = self.scheduler
         try:
             history_manager = scheduler._get_history_manager()
             if history_manager is None:
@@ -90,9 +97,10 @@ def create_stats_router(scheduler) -> APIRouter:
             message=f"已清理 {result['history']} 条历史记录和 {result['stats']} 条统计记录",
         )
 
-    @router.get("/status", summary="获取调度器状态")
-    def get_status():
+    @get(summary="获取调度器状态")
+    def status(self):
         """获取调度器运行状态"""
+        scheduler = self.scheduler
         return Resp.OK(data={
             "is_running": scheduler._running,
             "enabled": scheduler.settings.enabled,
@@ -101,4 +109,14 @@ def create_stats_router(scheduler) -> APIRouter:
             "total_jobs": len(scheduler._jobs),
         })
 
-    return router
+
+def create_stats_router(scheduler) -> APIRouter:
+    """创建统计与控制路由（注入 scheduler 后返回 StatsController 路由）。
+
+    Args:
+        scheduler: Scheduler 实例
+
+    Returns:
+        APIRouter
+    """
+    return StatsController.create_router(scheduler=scheduler)
