@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Union
 from fastapi import APIRouter, Query
 from pydantic import Field
 
+from yweb.controller import ResourceController, get, post
 from yweb.orm import DTO
 from yweb.response import ItemResponse, OkResponse, Resp
 
@@ -96,30 +97,26 @@ class CacheInvalidatorToggleResponse(DTO):
 CacheStatsResponse = Union[CacheSummaryStatsResponse, CacheFunctionStatsResponse]
 
 
-def create_cache_router() -> APIRouter:
-    """创建通用缓存管理路由
-    
-    提供以下端点:
-        - GET  /functions                  列出所有缓存函数
-        - GET  /stats                      获取缓存统计（汇总或指定函数）
-        - GET  /entries                    查看指定函数的缓存条目列表（预览）
-        - GET  /entry                      查看指定函数的单个缓存条目（预览）
-        - POST /clear                      清空缓存（全部或指定函数）
-        - GET  /invalidator/registrations  查看自动失效注册
-        - POST /invalidator/toggle         启用/禁用自动失效
-    
-    Returns:
-        APIRouter
+class CacheController(ResourceController):
+    """通用缓存管理控制器。
+
+    生成路由（无额外 prefix）：
+        GET  /functions  列出所有缓存函数
+        GET  /stats      获取缓存统计（汇总或指定函数）
+        GET  /entries    查看指定函数的缓存条目列表（预览）
+        GET  /entry      查看指定函数的单个缓存条目（预览）
+        POST /clear      清空缓存（全部或指定函数）
     """
-    router = APIRouter()
-    
-    @router.get(
-        "/functions",
+
+    prefix = ""
+    tags = ["缓存管理"]
+
+    @get(
         summary="列出缓存函数",
         description="列出所有通过 @cached 装饰的函数及其配置信息",
         response_model=ItemResponse[CacheFunctionsResponse],
     )
-    async def list_functions():
+    async def functions(self):
         """列出所有已注册的缓存函数"""
         functions = cache_registry.list_functions()
         return Resp.OK(
@@ -128,14 +125,14 @@ def create_cache_router() -> APIRouter:
                 functions=[CacheFunctionInfoResponse.from_dict(item) for item in functions],
             )
         )
-    
-    @router.get(
-        "/stats",
+
+    @get(
         summary="获取缓存统计",
         description="获取所有缓存函数的统计信息，或指定函数的统计",
         response_model=ItemResponse[CacheStatsResponse],
     )
-    async def get_stats(
+    async def stats(
+        self,
         function_name: Optional[str] = Query(
             None, description="指定函数名，不指定则返回汇总统计"
         ),
@@ -146,16 +143,16 @@ def create_cache_router() -> APIRouter:
             if func is None:
                 return Resp.NotFound(message=f"缓存函数 '{function_name}' 不存在")
             return Resp.OK(data=CacheFunctionStatsResponse.from_dict(func.stats()))
-        
+
         return Resp.OK(data=CacheSummaryStatsResponse.from_dict(cache_registry.get_all_stats()))
-    
-    @router.get(
-        "/entries",
+
+    @get(
         summary="查看缓存条目列表",
         description="查看指定缓存函数的条目列表（返回脱敏预览，不返回完整原始值）",
         response_model=ItemResponse[CacheEntriesResponse],
     )
-    async def list_entries(
+    async def entries(
+        self,
         function_name: str = Query(..., description="缓存函数名"),
         limit: int = Query(50, ge=1, le=100, description="最多返回条目数"),
     ):
@@ -164,14 +161,14 @@ def create_cache_router() -> APIRouter:
         if result is None:
             return Resp.NotFound(message=f"缓存函数 '{function_name}' 不存在")
         return Resp.OK(data=CacheEntriesResponse.from_dict(result))
-    
-    @router.get(
-        "/entry",
+
+    @get(
         summary="查看单个缓存条目",
         description="查看指定缓存函数的单个条目（返回脱敏预览，不返回完整原始值）",
         response_model=ItemResponse[CacheEntryResponse],
     )
-    async def get_entry(
+    async def entry(
+        self,
         function_name: str = Query(..., description="缓存函数名"),
         key: str = Query(..., description="缓存键（函数内部键）"),
     ):
@@ -179,19 +176,19 @@ def create_cache_router() -> APIRouter:
         func = cache_registry.get(function_name)
         if func is None:
             return Resp.NotFound(message=f"缓存函数 '{function_name}' 不存在")
-        
+
         entry = cache_registry.get_entry(function_name, key)
         if entry is None:
             return Resp.NotFound(message=f"缓存条目不存在: {function_name}:{key}")
         return Resp.OK(data=CacheEntryResponse.from_dict(entry))
-    
-    @router.post(
-        "/clear",
+
+    @post(
         summary="清空缓存",
         description="清空指定函数或所有函数的缓存数据",
         response_model=OkResponse,
     )
-    async def clear_cache(
+    async def clear(
+        self,
         function_name: Optional[str] = Query(
             None, description="指定函数名，不指定则清空所有缓存"
         ),
@@ -205,20 +202,31 @@ def create_cache_router() -> APIRouter:
                 data={"function": function_name},
                 message=f"缓存已清空: {function_name}",
             )
-        
+
         count = cache_registry.clear_all()
         return Resp.OK(
             data={"cleared_count": count},
             message=f"已清空 {count} 个函数的缓存",
         )
-    
-    @router.get(
-        "/invalidator/registrations",
+
+
+class CacheInvalidatorController(ResourceController):
+    """缓存自动失效管理控制器。
+
+    生成路由（prefix=/invalidator）：
+        GET  /invalidator/registrations  查看自动失效注册
+        POST /invalidator/toggle         启用/禁用自动失效
+    """
+
+    prefix = "/invalidator"
+    tags = ["缓存管理"]
+
+    @get(
         summary="查看自动失效注册",
         description="查看 CacheInvalidator 中所有模型与缓存函数的关联注册",
         response_model=ItemResponse[CacheInvalidatorRegistrationsResponse],
     )
-    async def get_invalidator_registrations():
+    async def registrations(self):
         """获取自动失效注册信息"""
         registrations = cache_invalidator.get_registrations()
         return Resp.OK(
@@ -228,14 +236,14 @@ def create_cache_router() -> APIRouter:
                 registrations=registrations,
             )
         )
-    
-    @router.post(
-        "/invalidator/toggle",
+
+    @post(
         summary="切换自动失效",
         description="启用或禁用 ORM 事件驱动的缓存自动失效",
         response_model=ItemResponse[CacheInvalidatorToggleResponse],
     )
-    async def toggle_invalidator(
+    async def toggle(
+        self,
         enabled: bool = Query(..., description="是否启用自动失效"),
     ):
         """启用/禁用自动失效"""
@@ -243,13 +251,37 @@ def create_cache_router() -> APIRouter:
             cache_invalidator.enable()
         else:
             cache_invalidator.disable()
-        
+
         return Resp.OK(
             data=CacheInvalidatorToggleResponse(enabled=cache_invalidator.is_enabled),
             message=f"自动失效已{'启用' if enabled else '禁用'}",
         )
-    
+
+
+def create_cache_router() -> APIRouter:
+    """创建通用缓存管理路由
+
+    由 CacheController + CacheInvalidatorController 两个类视图组装而成，
+    路由保持不变:
+        - GET  /functions                  列出所有缓存函数
+        - GET  /stats                      获取缓存统计（汇总或指定函数）
+        - GET  /entries                    查看指定函数的缓存条目列表（预览）
+        - GET  /entry                      查看指定函数的单个缓存条目（预览）
+        - POST /clear                      清空缓存（全部或指定函数）
+        - GET  /invalidator/registrations  查看自动失效注册
+        - POST /invalidator/toggle         启用/禁用自动失效
+
+    Returns:
+        APIRouter
+    """
+    router = APIRouter()
+    router.include_router(CacheController.router)
+    router.include_router(CacheInvalidatorController.router)
     return router
 
 
-__all__ = ["create_cache_router"]
+__all__ = [
+    "create_cache_router",
+    "CacheController",
+    "CacheInvalidatorController",
+]

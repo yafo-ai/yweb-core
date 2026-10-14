@@ -526,10 +526,13 @@ scheduler.start()
 ```python
 @with_db_session()
 async def async_task(session):
-    """支持异步函数"""
+    """支持异步函数（装饰器内部处理线程安全）"""
     users = session.query(User).all()
     await send_notifications(users)
 ```
+
+> **注意**：`@with_db_session()` 装饰器内部管理 session 的生命周期和线程上下文。
+> 这与 FastAPI 路由不同——在 FastAPI 路由中，应使用 `def` 路由或 `async_db_call()` 包装。
 
 #### 参数说明
 
@@ -547,6 +550,182 @@ async def async_task(session):
 | 定时任务 | `@with_db_session` | 装饰器方式，简洁优雅 |
 | 后台任务 | `@with_db_session` | 自动注入 session |
 | 测试代码 | `db_session_scope()` | 便于控制事务边界 |
+
+## 异步路由与同步 ORM
+
+### 问题背景
+
+YWeb ORM 基于 SQLAlchemy 同步 Session。当你在 `async def` 路由中直接调用同步 ORM 方法时，
+这些同步调用会**阻塞事件循环**，导致所有并发请求被串行化，最终引发 `QueuePool TimeoutError`。
+
+```python
+# ❌ 危险：async def 中直接调用同步 ORM，会阻塞事件循环
+@app.get("/users")
+async def list_users():
+    return User.query.all()  # 阻塞！所有并发请求被串行化
+```
+
+### 异步安全检测
+
+YWeb 内置了异步安全检测机制，当你在 `async def` 中直接调用同步 ORM 时，
+框架会抛出 `SynchronousOnlyOperation` 异常并给出修复指引：
+
+```python
+from yweb.orm import SynchronousOnlyOperation
+
+# 在 async 上下文中访问 Model.query 或 db_manager.get_session() 时
+# 框架自动检测并抛出 SynchronousOnlyOperation
+```
+
+检测行为可通过环境变量 `YWEB_ASYNC_SAFETY` 控制：
+
+| 值 | 行为 |
+|----|------|
+| `error`（默认） | 抛出 `SynchronousOnlyOperation` 异常 |
+| `warn` | 发出 `RuntimeWarning` 警告，继续执行 |
+| `off` | 禁用检测（不推荐，仅用于调试） |
+
+### 推荐方式
+
+**方式 1（推荐）：使用 `def` 路由**
+
+`def` 路由中 ORM 调用直接可用，FastAPI 自动放入线程池：
+
+```python
+@app.get("/users")
+def list_users():
+    return User.query.filter(User.is_active.is_(True)).all()
+
+@app.get("/users/{uid}")
+def get_user(uid: int):
+    return User.query.get(uid)
+```
+
+**方式 2（写路径 / 多语句事务 / 批量兜底）：`def` 路由 或 `async_db_call()`**
+
+涉及 `save() / add() / update() / delete() / commit()` 等写操作、或要在一次 session 内跑
+多语句 / 批量 / 复杂回调，建议走 `def` 路由（FastAPI 自动线程池）或 `await async_db_call(...)`
+手动包装：
+
+```python
+# ✅ def 路由（最简）
+@app.get("/users")
+def list_users():
+    return User.query.all()
+
+# ✅ async def + async_db_call()，适合写操作 / 多语句 / 混合 async I/O
+from yweb.orm import async_db_call
+
+@app.post("/users")
+async def create_user(body: UserCreate):
+    def _tx():
+        u = User(name=body.name)
+        u.save(commit=True)
+        return u.to_dict()
+    return await async_db_call(_tx)
+
+@app.get("/users-with-extra")
+async def list_users_with_extra():
+    users = await async_db_call(User.get_all)
+    extra = await some_async_http_call()
+    return {"users": users, "extra": extra}
+```
+
+### async_db_call() API
+
+```python
+from yweb.orm import async_db_call
+
+result = await async_db_call(func, *args, **kwargs)
+```
+
+| 参数 | 说明 |
+|------|------|
+| `func` | 同步的可调用对象（函数或 lambda） |
+| `*args` | 传给 func 的位置参数 |
+| `**kwargs` | 传给 func 的关键字参数 |
+
+内部通过 Starlette 的 `run_in_threadpool` 将同步调用移交到线程池，
+`ContextVar`（request_id）会自动传递，因此同一请求内的多次 `async_db_call()` 调用共享同一个 Session。
+
+### async_db_call 的使用边界
+
+`async_db_call()` 专为 **FastAPI HTTP 请求处理** 设计。它只做一件事：把同步函数放到线程池执行。
+它**不管理 session 生命周期**——session 的创建和清理由 `RequestIDMiddleware`（或 `get_db()`）负责。
+
+#### ✅ BackgroundTasks 中使用（安全）
+
+`RequestIDMiddleware` 是纯 ASGI 中间件，`await self.app(scope, receive, send)` 涵盖了整个
+ASGI 生命周期（包括 BackgroundTasks）。`on_request_end()` 在 BackgroundTasks **执行完毕后**才调用：
+
+```
+请求进入
+  → middleware: _set_request_id("abc-123")
+  → await self.app(scope, receive, send)    ← 整个 ASGI 生命周期
+  │   ├── 路由 handler 执行，注册 BackgroundTask
+  │   ├── 响应 body 发送（客户端已收到）
+  │   └── BackgroundTask 执行               ← session 仍在，request_id 仍为 "abc-123"
+  → finally: on_request_end()               ← 最后才清理
+```
+
+因此在 BackgroundTasks 中使用 `async_db_call` 是安全的，session 由 middleware 统一清理：
+
+```python
+@app.post("/send-report")
+async def send_report(background_tasks: BackgroundTasks):
+    background_tasks.add_task(generate_report)
+    return {"status": "accepted"}
+
+# ✅ 安全：BackgroundTask 执行期间仍在 middleware 的 ASGI 生命周期内
+async def generate_report():
+    users = await async_db_call(User.get_all)
+    # ... 生成报表
+```
+
+> **注意**：这依赖于 `RequestIDMiddleware` 的纯 ASGI 实现（非 `BaseHTTPMiddleware`）。
+> 如果使用 `BaseHTTPMiddleware`，`call_next()` 会创建新的任务上下文，
+> ContextVar 传播和清理时机都会不同，BackgroundTasks 中的 session 可能泄漏。
+
+#### ❌ 非 HTTP 请求上下文中使用
+
+在没有 `RequestIDMiddleware` 的 async 上下文中（脚本、定时任务等），
+`async_db_call` 在线程池创建的 session 无人清理，会导致连接泄漏：
+
+```python
+# ❌ 能跑但不推荐：没有 middleware，session 无人清理
+async def standalone_job():
+    init_database("sqlite:///app.db")
+    users = await async_db_call(User.get_all)  # session 泄漏！
+
+# ✅ 正确：db_session_scope 自行管理 session，async 下内部自动 allow_sync
+async def standalone_job():
+    init_database("sqlite:///app.db")
+    with db_session_scope(request_id="cli-export") as session:
+        users = User.query.filter_by(is_active=True).all()
+```
+
+> `async_db_call` 会在运行时检测此场景并输出警告日志，但不会阻止执行。
+> 看到警告时请改用 `db_session_scope()`。
+
+#### 总结
+
+| 场景 | `async_db_call` | `db_session_scope` | 原因 |
+|------|:-:|:-:|------|
+| FastAPI `async def` 路由 | ✅ | — | middleware 管理 session |
+| BackgroundTasks | ✅ | — | 仍在 middleware ASGI 生命周期内 |
+| 定时任务 | ❌ | ✅ | 无 HTTP 请求上下文 |
+| 脚本 / CLI | ❌ | ✅ | 无 middleware |
+
+### 场景选择指南
+
+| 场景 | 推荐方式 | 原因 |
+|------|----------|------|
+| `def` 路由（纯 DB） | `def` 路由 + `.query.xxx()` | 最简单，FastAPI 自动线程池 |
+| `async def` 路由 — 需要 async I/O | `await async_db_call(func)` | 写操作 / 混合 I/O |
+| `async def` 路由 — 写路径 / 多语句 | `async def` + `await async_db_call(func)` | 写操作批量共享一个 session |
+| BackgroundTasks | `async_db_call()` 或 `db_session_scope()` | 均安全，前者更简洁 |
+| 脚本/定时任务（含 async） | `db_session_scope()` / `@with_db_session` | 非 HTTP 请求上下文，需自行管理 session |
+| 测试代码 | 直接调用（非 async 上下文） | 检测自动放行 |
 
 ## 常见问题
 
@@ -678,6 +857,30 @@ user.save(commit=True)
 ```
 
 详细说明请参考 [03_CRUD操作](03_crud_operations.md) 中的"刷新对象"和"关系操作使用单次提交模式"章节。
+
+### Q8: async def 路由中调用 ORM 报 SynchronousOnlyOperation？
+
+在 `async def` 中直接访问 `Model.query` 会抛出 `SynchronousOnlyOperation`，
+提示你使用 `def` 路由或 `async_db_call()` 包装。
+
+```python
+# ❌ async def 中直接调 ORM
+@app.get("/users")
+async def list_users():
+    users = User.query.all()          # → SynchronousOnlyOperation
+
+# ✅ 方式 1（推荐）：使用 def 路由
+@app.get("/users")
+def list_users():
+    return User.query.all()
+
+# ✅ 方式 2：写操作 / 多语句，用 async_db_call()
+@app.get("/users")
+async def list_users():
+    return await async_db_call(User.get_all)
+```
+
+如需临时禁用整个安全检测（不推荐），设置 `YWEB_ASYNC_SAFETY=off`。
 
 ## 下一步
 

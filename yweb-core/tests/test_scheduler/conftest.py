@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker, scoped_session
 from sqlalchemy.pool import StaticPool
 
 from yweb.orm import CoreModel, BaseModel
+from yweb.orm.async_safety import AsyncSafeQueryProperty
 from yweb.scheduler import create_scheduler_models
 
 
@@ -63,16 +64,31 @@ def scheduler_db_session(scheduler_engine, scheduler_models):
     # scopefunc 返回固定值，确保所有调用共享同一 session
     session_scope = scoped_session(SessionLocal, scopefunc=lambda: 0)
     
-    # 设置 CoreModel.query
-    CoreModel.query = session_scope.query_property()
+    # 注意：读取原 query 必须走 __dict__，不能用 getattr()，
+    # 因为 descriptor.__get__(None, CoreModel) 会对抽象基类发起
+    # session.query(CoreModel) → ArgumentError。
+    _SENTINEL = object()
+    previous_query = CoreModel.__dict__.get("query", _SENTINEL)
+    CoreModel.query = AsyncSafeQueryProperty(session_scope.query_property())
     
-    yield session_scope()
-    
-    # 清理 - 忽略可能的线程错误
     try:
-        session_scope.remove()
-    except Exception:
-        pass
+        yield session_scope()
+    finally:
+        # 关键：无论测试结果如何，都要恢复 CoreModel.query，避免跨模块测试污染
+        # （详见 23 号清单 Phase 5B.1 验收项）
+        if previous_query is _SENTINEL:
+            try:
+                del CoreModel.query
+            except AttributeError:
+                pass
+        else:
+            CoreModel.query = previous_query
+        # 清理 - 忽略可能的线程错误
+        try:
+            session_scope.remove()
+        except (RuntimeError, AttributeError):
+            # teardown 阶段允许清理失败，避免覆盖测试主体断言结果
+            pass
 
 
 @pytest.fixture

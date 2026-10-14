@@ -1062,7 +1062,7 @@ org_service.delete_employee(employee_id=1)
 ```python
 from fastapi import FastAPI, Depends
 from yweb.organization import create_org_router
-from yweb.permission import require_role
+from yweb.rbac import require_role
 
 app = FastAPI()
 

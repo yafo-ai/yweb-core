@@ -43,7 +43,7 @@
 - [ ] 在 `setup_auth()` / `mount_routes()` 中注入插件上下文
 - [ ] 支持插件做二次风控（IP、设备、地理位置）和自定义 claim 注入
 
-#### 3) 权限模块（`yweb/permission/factory.py`、`yweb/permission/dependencies.py`）
+#### 3) 权限模块（`yweb/rbac/factory.py`、`yweb/rbac/dependencies.py`）
 - [ ] 增加钩子：`before_permission_check`、`after_permission_check`、`on_role_changed`
 - [ ] 支持插件扩展 Subject 解析与权限决策（ABAC/策略中心）
 - [ ] 缓存失效时触发权限变更事件，供审计和同步系统消费
@@ -78,7 +78,7 @@
 ### E) 验收标准（扩展机制）
 
 - [ ] 不改业务代码，仅通过配置即可启用/停用插件
-- [ ] 现有 `setup_auth/setup_permission/setup_organization/setup_scheduler` 向后兼容
+- [ ] 现有 `setup_auth/setup_rbac/setup_organization/setup_scheduler` 向后兼容
 - [ ] 至少 3 个内置插件接入（建议：审计、指标、限流）
 - [ ] 插件崩溃时主链路可继续，并有明确日志定位
 

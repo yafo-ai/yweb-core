@@ -1,0 +1,27 @@
+---
+description: 编写或修改 Agent 内部工具调用协议（LLM 文本指令的解析 parser、构建 builder、格式说明 prompt、指令 DSL）相关代码时自动激活。
+globs: yweb-core/yweb/agent/command/**/*.py, **/agent/command/parser/**/*.py, **/tests/test_agent_command/**/*.py
+---
+
+# YWeb Agent 内部工具调用协议编码规范
+
+编写或修改内部工具调用协议（`yweb.agent.command`）相关代码时，**必须先阅读对应的 Skill 文档**：
+
+> **Skill 路径**：`.cursor/skills/yweb-agent-command/SKILL.md`
+>
+> **测试补充规则**：`.cursor/rules/yweb-testing.mdc` + `.cursor/rules/how-to-add-pytest-class-unit-test.mdc`
+>
+> **测试失败处置**：`.cursor/rules/test-quality-and-failure-workflow.mdc`
+
+## 关键规范速查
+
+1. **三项能力**：① 解析（parser）：文本 → `ParsedCommand`；② 构建（builder）：结构化 → `command` 文本；③ 格式说明（prompt）：工具描述 → 提示词片段。
+2. **零外部运行时依赖**：仅用标准库 `ast` / `re`，**禁止**引入 `json-repair` 等外部包。
+3. **零框架耦合**：**禁止** import 工作流引擎、LLM 客户端等外部运行时。
+4. **数据容器用 `@dataclass`**：`ParsedCommand` / `CallValue` / `ArtifactRef` 一律 `@dataclass`，不用 Pydantic。
+5. **指令 DSL = 函数式语法**：函数 `name(...)`、数组 `[...]`、嵌套对象 `item(...)` / `record(...)` → `CallValue`；外部资源 `@artifact("path")` → `ArtifactRef`。
+6. **参数分隔符兼容换行与逗号**：标准写法用换行，亦兼容逗号；**同行空格不切分**；引号/括号内的分隔符不切分。
+7. **命令提取用括号平衡扫描**：`parse_command_output` 用引号/转义感知的括号匹配定位 `)`，**禁止**退回非贪婪正则（否则无法支持嵌套 `item(...)` 且会误判引号内的 `)|>`）。
+8. **字面量解析优雅降级**：`_parse_literal` 用纯 `ast.literal_eval`，失败时降级为去引号或保留原始字符串，**不抛异常、不修复畸形 JSON**。
+
+改动前不确定语义时，先阅读 Skill 与 `tests/test_agent_command/` 下的用例，不要凭猜测改解析逻辑。

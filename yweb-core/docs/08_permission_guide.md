@@ -48,12 +48,12 @@
 
 ```python
 from fastapi import FastAPI, Depends
-from yweb.permission import setup_permission, require_permission
+from yweb.rbac import setup_rbac, require_permission
 
 app = FastAPI()
 
 # 一行代码完成全部配置
-perm = setup_permission(
+perm = setup_rbac(
     app=app,
     api_prefix="/api/v1/permission",
     table_prefix="sys_",
@@ -65,7 +65,7 @@ async def list_users(user = Depends(require_permission("user:list"))):
     return {"users": [...]}
 ```
 
-`setup_permission()` 会自动完成以下步骤：
+`setup_rbac()` 会自动完成以下步骤：
 
 1. 创建所有模型（Permission, Role, SubjectRole, RolePermission, SubjectPermission）
 2. 初始化权限依赖（`init_permission_dependency`）
@@ -79,10 +79,10 @@ async def list_users(user = Depends(require_permission("user:list"))):
 适用于需要在创建模型和挂载路由之间插入自定义逻辑的场景：
 
 ```python
-from yweb.permission import create_permission_models
+from yweb.rbac import create_rbac_models
 
 # 1. 创建所有模型
-perm = create_permission_models(table_prefix="sys_")
+perm = create_rbac_models(table_prefix="sys_")
 
 # 2. 在此处可插入自定义逻辑...
 
@@ -102,7 +102,7 @@ perm.mount_routes(
 需要完全控制时，继承抽象模型：
 
 ```python
-from yweb.permission.models import (
+from yweb.rbac.models import (
     AbstractPermission,
     AbstractRole,
     AbstractSubjectRole,
@@ -110,7 +110,7 @@ from yweb.permission.models import (
     AbstractSubjectPermission,
     AbstractAPIResource,
 )
-from yweb.permission import setup_permission_relationships  # 辅助函数
+from yweb.rbac import setup_rbac_relationships  # 辅助函数
 
 # 权限模型
 class Permission(AbstractPermission):
@@ -145,18 +145,18 @@ class APIResource(AbstractAPIResource):
     __permission_tablename__ = "sys_permission"
 
 # 使用辅助函数自动设置所有 relationship（推荐）
-setup_permission_relationships(
+setup_rbac_relationships(
     Permission, Role, SubjectRole, RolePermission, SubjectPermission
 )
 ```
 
-> **提示**：`setup_permission_relationships()` 会自动为角色添加 `parent`、`children` 树形关系，以及各关联模型添加 `role`、`permission` 等 relationship 属性。
+> **提示**：`setup_rbac_relationships()` 会自动为角色添加 `parent`、`children` 树形关系，以及各关联模型添加 `role`、`permission` 等 relationship 属性。
 
 **初始化服务**（级别3 需手动初始化）：
 
 ```python
 from fastapi import FastAPI
-from yweb.permission import init_permission_dependency
+from yweb.rbac import init_permission_dependency
 
 app = FastAPI()
 
@@ -173,10 +173,10 @@ async def startup():
 
 ### PermissionModels 返回对象
 
-`create_permission_models()` 和 `setup_permission()` 返回的 `PermissionModels` 对象包含：
+`create_rbac_models()` 和 `setup_rbac()` 返回的 `PermissionModels` 对象包含：
 
 ```python
-perm = create_permission_models()
+perm = create_rbac_models()
 
 # 模型类
 perm.Permission          # 权限模型
@@ -200,7 +200,7 @@ perm.mount_routes(app)   # 挂载路由
 
 ```python
 from fastapi import Depends
-from yweb.permission import require_permission, require_role
+from yweb.rbac import require_permission, require_role
 
 @app.get("/users")
 async def list_users(user = Depends(require_permission("user:list"))):
@@ -229,7 +229,7 @@ class PermissionMixin:
 class RoleMixin:
     color: Mapped[str] = mapped_column(String(20), nullable=True, comment="显示颜色")
 
-perm = setup_permission(
+perm = setup_rbac(
     app=app,
     table_prefix="sys_",
     permission_mixin=PermissionMixin,
@@ -306,7 +306,7 @@ super_admin
 
 ```python
 from yweb.auth import AbstractUser
-from yweb.permission.mixins import ExternalUserSubjectMixin
+from yweb.rbac.mixins import ExternalUserSubjectMixin
 
 class User(AbstractUser, ExternalUserSubjectMixin):
     __tablename__ = "sys_user"
@@ -337,7 +337,7 @@ user.subject_id  # "external:456"
 #### 示例：为角色添加部门关联
 
 ```python
-from yweb.permission import AbstractRole
+from yweb.rbac import AbstractRole
 from sqlalchemy import Integer, String, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -440,7 +440,7 @@ Base.metadata.create_all(get_engine())
 - **如需完整文档**：可以自定义响应 Schema 继承基类并添加扩展字段定义
 
 ```python
-from yweb.permission.schemas import RoleResponse
+from yweb.rbac.schemas import RoleResponse
 
 # 自定义 Schema（可选，仅为了完整的 OpenAPI 文档）
 class MyRoleResponse(RoleResponse):
@@ -455,7 +455,7 @@ class MyRoleResponse(RoleResponse):
 ### 使用 FastAPI 依赖注入
 
 ```python
-from yweb.permission import require_permission, require_role, require_any_permission
+from yweb.rbac import require_permission, require_role, require_any_permission
 
 # 需要单个权限
 @app.get("/users")
@@ -493,7 +493,7 @@ async def update_config(user = Depends(require_role("admin", "super_admin"))):
 适用于普通函数：
 
 ```python
-from yweb.permission import permission_required, role_required
+from yweb.rbac import permission_required, role_required
 
 @permission_required("user:read")
 def get_user(subject_id: str, user_id: int):
@@ -515,7 +515,7 @@ def get_orders(current_user: str):
 更灵活的检查方式：
 
 ```python
-from yweb.permission import get_permission_service
+from yweb.rbac import get_permission_service
 
 perm_service = get_permission_service()
 
@@ -552,7 +552,7 @@ roles = perm_service.get_all_roles("employee:123")
 ### 创建角色
 
 ```python
-from yweb.permission import RoleService
+from yweb.rbac import RoleService
 
 role_service = RoleService(
     role_model=Role,
@@ -630,7 +630,7 @@ ancestors = role.get_ancestors()
 - 外部用户：`external:456`
 
 ```python
-from yweb.permission import make_subject_id, parse_subject_id, UserType
+from yweb.rbac import make_subject_id, parse_subject_id, UserType
 
 # 创建主体ID
 subject_id = make_subject_id(UserType.EMPLOYEE, 123)
@@ -692,7 +692,7 @@ perm_service.revoke_subject_permission("employee:123", "finance:report")
 ### 缓存配置
 
 ```python
-from yweb.permission import configure_cache
+from yweb.rbac import configure_cache
 
 # 配置缓存参数
 configure_cache(
@@ -794,7 +794,7 @@ def add_role_permission(self, role_code: str, permission_code: str):
 通常不需要手动失效（服务层已自动处理），但以下场景可能需要：
 
 ```python
-from yweb.permission import permission_cache
+from yweb.rbac import permission_cache
 
 # 失效单个用户缓存
 permission_cache.invalidate_subject("employee:123")
@@ -869,7 +869,7 @@ permission_cache.reset_stats()
 ### 方式1：一次性挂载全部
 
 ```python
-from yweb.permission import create_permission_router
+from yweb.rbac import create_permission_router
 
 router = create_permission_router(
     permission_model=Permission,
@@ -960,7 +960,7 @@ app.include_router(router)
 ### 方式2：按需挂载
 
 ```python
-from yweb.permission import (
+from yweb.rbac import (
     create_permission_crud_router,
     create_role_crud_router,
     create_subject_router,
@@ -989,7 +989,7 @@ app.include_router(
 只使用 Service 类，自己编写 API：
 
 ```python
-from yweb.permission import PermissionService, RoleService
+from yweb.rbac import PermissionService, RoleService
 
 perm_service = PermissionService(...)
 role_service = RoleService(...)
@@ -1011,7 +1011,7 @@ async def my_grant_api(data: MySchema):
 
 ```python
 from yweb.organization import AbstractEmployee
-from yweb.permission.mixins import EmployeeSubjectMixin
+from yweb.rbac.mixins import EmployeeSubjectMixin
 
 class Employee(AbstractEmployee, EmployeeSubjectMixin):
     __tablename__ = "sys_employee"
@@ -1164,7 +1164,7 @@ history = get_model_history(Permission, permission_id)
 **推荐的挂载方式：**
 
 ```python
-from yweb.permission import create_permission_router
+from yweb.rbac import create_permission_router
 
 # 系统管理 API 使用 _sys 前缀
 router = create_permission_router(
@@ -1214,7 +1214,7 @@ async def init_sys_permissions():
 **分开挂载，设置不同权限：**
 
 ```python
-from yweb.permission import (
+from yweb.rbac import (
     create_permission_crud_router,
     create_role_crud_router,
     create_subject_router,
@@ -1273,7 +1273,7 @@ app.include_router(
 **步骤 1：挂载 API 资源管理路由**
 
 ```python
-from yweb.permission import create_api_resource_router
+from yweb.rbac import create_api_resource_router
 
 app.include_router(
     create_api_resource_router(
@@ -1358,7 +1358,7 @@ app.middleware("http")(dynamic_permission_check)
 | `SystemRoleModifyException` | 403 | 系统角色不可修改 |
 
 ```python
-from yweb.permission import PermissionDeniedException
+from yweb.rbac import PermissionDeniedException
 
 try:
     perm_service.check_permission(

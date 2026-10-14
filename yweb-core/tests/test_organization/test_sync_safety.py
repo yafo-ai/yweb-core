@@ -281,11 +281,11 @@ class TestEmployeeMarkResigned:
         assert result.deleted_count == 1
 
     def test_resigned_employee_restored_on_resync(self):
-        """之前标记离职的员工在外部重新出现时应恢复状态"""
+        """之前标记离职的员工在外部重新出现且未给 status 时应恢复在职"""
         svc = MockSyncService()
 
         svc._cached_employees = [
-            {"external_user_id": "u1", "name": "张三", "status": EmployeeStatus.ACTIVE.value},
+            {"external_user_id": "u1", "name": "张三"},
         ]
 
         # u1 本地存在但之前被标记为离职
@@ -308,3 +308,74 @@ class TestEmployeeMarkResigned:
         assert mock_rel.status == EmployeeStatus.ACTIVE.value
         assert result.updated_count == 1
         assert result.deleted_count == 0
+
+    def test_update_writes_status_when_payload_has_status(self):
+        """外部 payload 带 status=试用时，更新写入雇佣状态"""
+        svc = MockSyncService()
+        svc._cached_employees = [
+            {
+                "external_user_id": "u1",
+                "name": "张三",
+                "status": EmployeeStatus.PROBATION.value,
+            },
+        ]
+
+        mock_rel = MagicMock()
+        mock_rel.external_user_id = "u1"
+        mock_rel.employee_id = 1
+        mock_rel.status = EmployeeStatus.ACTIVE.value
+
+        svc.emp_org_rel_model.query.filter.return_value.all.return_value = [mock_rel]
+        svc.employee_model.get.return_value = MagicMock()
+
+        result = svc.sync_employees(MagicMock(id=1))
+
+        assert mock_rel.status == EmployeeStatus.PROBATION.value
+        assert result.updated_count == 1
+
+    def test_update_keeps_local_status_when_payload_omits_status(self):
+        """外部 payload 未给 status 时，不覆盖本地试用等非离职状态"""
+        svc = MockSyncService()
+        svc._cached_employees = [
+            {"external_user_id": "u1", "name": "张三"},
+        ]
+
+        mock_rel = MagicMock()
+        mock_rel.external_user_id = "u1"
+        mock_rel.employee_id = 1
+        mock_rel.status = EmployeeStatus.PROBATION.value
+
+        svc.emp_org_rel_model.query.filter.return_value.all.return_value = [mock_rel]
+        svc.employee_model.get.return_value = MagicMock()
+
+        result = svc.sync_employees(MagicMock(id=1))
+
+        assert mock_rel.status == EmployeeStatus.PROBATION.value
+        assert result.updated_count == 1
+
+    def test_create_uses_status_from_payload(self):
+        """新建员工时写入 payload 的 status，缺省为在职"""
+        svc = MockSyncService()
+        created_kwargs: list[dict] = []
+
+        def _capture_rel(**kwargs):
+            created_kwargs.append(kwargs)
+            rel = MagicMock(**kwargs)
+            return rel
+
+        svc.emp_org_rel_model.side_effect = _capture_rel
+        svc.employee_model.return_value = MagicMock(id=10)
+        svc.emp_org_rel_model.query.filter.return_value.all.return_value = []
+
+        svc._cached_employees = [
+            {
+                "external_user_id": "u_new",
+                "name": "李四",
+                "status": EmployeeStatus.PENDING.value,
+            },
+        ]
+
+        result = svc.sync_employees(MagicMock(id=1))
+
+        assert result.created_count == 1
+        assert created_kwargs[0]["status"] == EmployeeStatus.PENDING.value

@@ -43,6 +43,37 @@ class ModelLike:
     query = QueryLike()
 
 
+class SavepointSession:
+    """模拟 ORM session 的 begin_nested()，统计进入 / 回滚次数。"""
+
+    def __init__(self):
+        self.entered = 0
+        self.rolled_back = 0
+
+    def begin_nested(self):
+        outer = self
+
+        class _Ctx:
+            def __enter__(self):
+                outer.entered += 1
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                if exc_type is not None:
+                    outer.rolled_back += 1
+                return False  # 不吞异常，交由上层处理
+
+        return _Ctx()
+
+
+class QueryWithSession(QueryLike):
+    """带 session 的 Mock query，用于覆盖 _exists_by_id 的 SAVEPOINT 分支。"""
+
+    def __init__(self, session, existing_ids=None, raise_on_query=False):
+        super().__init__(existing_ids=existing_ids, raise_on_query=raise_on_query)
+        self.session = session
+
+
 class TestPrimaryKeyConfigAndGeneratorsExtraMore:
     def test_id_type_repr_and_configure_validations(self):
         assert str(IdType.UUID) == "uuid"
@@ -128,3 +159,31 @@ class TestPrimaryKeyConfigAndGeneratorsExtraMore:
         # 一直冲突失败
         with pytest.raises(RuntimeError):
             generator.generate_with_retry(model, lambda: "A", max_retries=2)
+
+    def test_dedup_query_runs_inside_savepoint_when_session_present(self):
+        """有 session 时，去重检测查询须包在 begin_nested() SAVEPOINT 内。"""
+        generator = PrimaryKeyGenerator(max_retries=3)
+        sess = SavepointSession()
+        model = type(
+            "ModelSP",
+            (),
+            {"__name__": "ModelSP", "query": QueryWithSession(sess, existing_ids={"A"})},
+        )
+        seq = iter(["A", "B"])
+        assert generator.generate_with_retry(model, lambda: next(seq)) == "B"
+        # 两次检测各进一次 SAVEPOINT；成功路径不回滚
+        assert sess.entered == 2
+        assert sess.rolled_back == 0
+
+    def test_dedup_query_failure_rolls_back_savepoint_and_returns_id(self):
+        """检测查询失败：回滚 SAVEPOINT（不污染外层事务）后返回 ID，由 INSERT 兜底暴露真错。"""
+        generator = PrimaryKeyGenerator(max_retries=3)
+        sess = SavepointSession()
+        model = type(
+            "ModelSPErr",
+            (),
+            {"__name__": "ModelSPErr", "query": QueryWithSession(sess, raise_on_query=True)},
+        )
+        assert generator.generate_with_retry(model, lambda: "Z") == "Z"
+        assert sess.entered == 1
+        assert sess.rolled_back == 1  # 查询异常触发 SAVEPOINT 回滚

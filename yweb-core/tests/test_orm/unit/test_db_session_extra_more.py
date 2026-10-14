@@ -125,6 +125,10 @@ class TestDbSessionExtraMore:
         m._request_id_explicit.set(True)
         assert m._set_request_id("new-id") == "locked"
 
+        # 清理，避免污染后续测试
+        m._request_id_var.set("")
+        m._request_id_explicit.set(False)
+
     def test_public_wrappers_get_db_and_db_session_scope(self, monkeypatch):
         # get_engine wrapper
         dbs.db_manager._engine = "E"
@@ -163,7 +167,7 @@ class TestDbSessionExtraMore:
         monkeypatch.setattr(dbs.db_manager, "get_session", lambda: sess)
         monkeypatch.setattr(dbs, "on_request_end", lambda: calls.__setitem__("end", calls["end"] + 1))
 
-        @dbs.with_db_session(request_id="sync-{rand}", auto_commit=True)
+        @dbs.with_db_session(request_id="sync-test", auto_commit=True)
         def fn(session, x):
             assert session is sess
             return x + 1
@@ -171,9 +175,9 @@ class TestDbSessionExtraMore:
         assert fn(1) == 2
         assert sess.commit_called == 1
         assert calls["end"] >= 1
-        assert calls["rid"][-1].startswith("sync-")
+        assert calls["rid"][-1].startswith("sync-test-")
 
-        @dbs.with_db_session(request_id="async-{rand}", auto_commit=False)
+        @dbs.with_db_session(request_id="async-test", auto_commit=False)
         async def afn(session, x):
             assert session is sess
             return x + 2
@@ -181,3 +185,61 @@ class TestDbSessionExtraMore:
 
         result = asyncio.run(afn(3))
         assert result == 5
+
+    def test_request_id_uniqueness_and_format(self, monkeypatch):
+        """request_id 每次调用唯一，格式为 '{前缀}-{6位hex}'"""
+        import re
+        import asyncio
+        collected = []
+        sess = SessionStub()
+
+        monkeypatch.setattr(dbs.db_manager, "_set_request_id", lambda rid: collected.append(rid))
+        monkeypatch.setattr(dbs.db_manager, "get_session", lambda: sess)
+        monkeypatch.setattr(dbs, "on_request_end", lambda: None)
+
+        hex6_re = re.compile(r"^.+-[0-9a-f]{6}$")
+
+        # with_db_session 不传 request_id → 函数名作前缀
+        @dbs.with_db_session()
+        def my_func(session):
+            return "ok"
+
+        my_func()
+        assert collected[-1].startswith("my_func-")
+        assert hex6_re.match(collected[-1])
+
+        # with_db_session 传 request_id → 自定义前缀 + 随机后缀
+        @dbs.with_db_session(request_id="nightly-cleanup")
+        def cleanup_job(session):
+            return "ok"
+
+        cleanup_job()
+        assert collected[-1].startswith("nightly-cleanup-")
+        assert hex6_re.match(collected[-1])
+
+        # 核心：同一函数多次调用 ID 不同（修复并发 session 共享）
+        first_id = collected[-1]
+        cleanup_job()
+        second_id = collected[-1]
+        assert first_id != second_id
+
+        # with_db_session async 同理
+        @dbs.with_db_session(request_id="async-job")
+        async def async_job(session):
+            return "ok"
+
+        asyncio.run(async_job())
+        assert collected[-1].startswith("async-job-")
+        assert hex6_re.match(collected[-1])
+
+        # db_session_scope 不传 request_id → "scope" 前缀
+        with dbs.db_session_scope() as s:
+            pass
+        assert collected[-1].startswith("scope-")
+        assert hex6_re.match(collected[-1])
+
+        # db_session_scope 传 request_id → 自定义前缀 + 随机后缀
+        with dbs.db_session_scope(request_id="daily-report") as s:
+            pass
+        assert collected[-1].startswith("daily-report-")
+        assert hex6_re.match(collected[-1])

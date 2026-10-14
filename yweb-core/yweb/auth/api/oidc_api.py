@@ -86,11 +86,12 @@ def create_oidc_router(
 
         # 获取用户信息
         user_id = result.get("sub") or result.get("user_id")
-        scope = result.get("scope", "")
+        scope_str = result.get("scope", "")
+        scopes = scope_str.split() if scope_str else []
 
-        claims = oidc_manager.get_userinfo_claims(
+        claims = oidc_manager.get_userinfo(
             user_id=user_id,
-            scope=scope,
+            scopes=scopes,
         )
 
         if not claims:

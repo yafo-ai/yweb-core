@@ -57,6 +57,57 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 ```
 
+## async def vs def 路由（重要）
+
+YWeb ORM 基于 SQLAlchemy 同步 Session。路由函数的声明方式直接影响并发性能：
+
+| 声明方式 | ORM 调用 | 是否安全 | 说明 |
+|----------|----------|---------|------|
+| `def` | `User.query.all()` | ✅ 安全 | FastAPI 自动放入线程池 |
+| `async def` + `async_db_call` | `await async_db_call(func)` | ✅ 安全 | 手动放入线程池，批量共享 session |
+| `async def` 直接调 ORM | `User.query.all()` | ❌ 抛异常 | `SynchronousOnlyOperation` |
+
+### 推荐：使用 def 路由（最简）
+
+```python
+# ✅ def 路由，FastAPI 自动在线程池中执行
+@app.get("/users")
+def list_users():
+    return User.query.filter(User.is_active.is_(True)).all()
+
+@app.post("/users")
+def create_user(data: UserCreate):
+    user = User(**data.dict())
+    user.save(True)
+    return user
+```
+
+### 混合 async I/O / 写路径 / 多语句：`async_db_call()`
+
+当路由需要**同时**使用异步 I/O 和数据库操作、或者要做**写操作 / 多语句事务**时，
+仍建议用 `async_db_call` 手动包装一段同步代码，让整段 DB 逻辑在同一个 session 内跑：
+
+```python
+from yweb.orm import async_db_call
+
+@app.post("/users")
+async def create_user(body: UserCreate):
+    def _tx():
+        u = User(**body.dict())
+        u.save(commit=True)
+        return u.to_dict()
+    return await async_db_call(_tx)
+
+@app.get("/users-with-extra")
+async def list_with_extra():
+    users = await async_db_call(User.get_all)
+    extra = await some_async_http_call()
+    return {"users": users, "extra": extra}
+```
+
+> **注意**：纯 DB 操作不涉及其他 async I/O 时，`def` 路由最简单。
+> 需要混合 async I/O 或写操作时用 `async_db_call`。
+
 ## 依赖注入
 
 ### get_db 依赖
@@ -418,7 +469,30 @@ async def db_session_middleware(request: Request, call_next):
 
 ## 最佳实践
 
-### 1. 使用依赖注入
+### 1. 路由函数声明
+
+```python
+# ✅ 推荐：纯数据库操作使用 def
+@app.get("/users")
+def list_users():
+    return User.query.all()
+
+# ✅ 推荐：混合 async I/O / 写路径用 async def + async_db_call
+@app.post("/users")
+async def create_user(body: UserCreate):
+    def _tx():
+        u = User(**body.dict())
+        u.save(commit=True)
+        return u.to_dict()
+    return await async_db_call(_tx)
+
+# ❌ async def 中直接调 ORM 会抛 SynchronousOnlyOperation
+@app.get("/users")
+async def list_users():
+    users = User.query.all()          # → SynchronousOnlyOperation
+```
+
+### 2. 使用依赖注入
 
 ```python
 # 推荐

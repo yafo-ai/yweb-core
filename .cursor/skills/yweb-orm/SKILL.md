@@ -88,6 +88,46 @@ YWeb ORM 基于 **SQLAlchemy**，采用 **Active Record 模式**：
 | `yweb-core/docs/orm_commit_behavior_outside_transaction.md` | 事务外提交行为 |
 | `yweb-core/docs/orm_commit_suppression_mechanism.md` | 提交抑制机制 |
 
+## ⚠️ async 安全（必读）
+
+ORM 基于同步 SQLAlchemy Session。在 `async def` 中直接访问 `Model.query` 会抛出 `SynchronousOnlyOperation`，引导开发者使用安全方式。
+
+| 场景 | 写法 | 安全 |
+|------|------|------|
+| 纯 DB 操作路由（**推荐**） | `def get_users()` → `User.query.all()` | ✅ FastAPI 自动线程池 |
+| async + 混合 I/O / 写路径 | `async def` + `await async_db_call(func, ...)` | ✅ 手动线程池，同一 request 内共享 session |
+| 启动 / lifespan / 脚本入口 | `with allow_sync():` 或 `with db_session_scope():` | ✅ 临时豁免（`db_session_scope` 在 async 下内部自动 allow_sync） |
+| `async def` 直接调 ORM | `User.query.all()` | ❌ 抛 `SynchronousOnlyOperation` |
+
+```python
+# ✅ 推荐：def 路由（最简）
+@router.get("/users")
+def list_users():
+    return User.query.filter(User.is_active.is_(True)).all()
+
+# ✅ 需要混合 async I/O 时：async_db_call 包装
+from yweb.orm import async_db_call
+
+@router.get("/users")
+async def list_users():
+    users = await async_db_call(
+        lambda: User.query.filter(User.is_active.is_(True)).all()
+    )
+    extra = await some_async_call()
+    return {"users": users, "extra": extra}
+
+# ✅ async 写 / 多语句 / 批量：async_db_call 包装
+@router.post("/users")
+async def create_user(body: UserCreate):
+    def _tx():
+        u = User(name=body.name)
+        u.save(commit=True)
+        return u.to_dict()
+    return await async_db_call(_tx)
+```
+
+详见 `yweb-core/docs/orm_docs/15_fastapi_integration.md`、`yweb-core/yweb/orm/async_safety.py`。
+
 ## 工作流程
 
 1. 定义新模型前，阅读 `02_model_definition.md`

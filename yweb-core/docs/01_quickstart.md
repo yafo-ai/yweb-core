@@ -219,8 +219,48 @@ user_dict = {"id": 1, "name": "Tom", "email": "tom@example.com"}
 return Resp.OK(UserDTO.from_dict(user_dict))
 ```
 
+## 使用 ResourceController 类视图
+
+除了上面的函数式路由，还可以用 `ResourceController` 以类的方式组织 API：
+
+```python
+from fastapi import FastAPI
+from yweb import Resp
+from yweb.controller import ResourceController, get
+
+app = FastAPI(title="My App")
+
+class UserController(ResourceController):
+    prefix = "/user"
+    tags = ["用户"]
+
+    @get
+    async def list(self, page: int = 1, size: int = 10):
+        """获取用户列表"""
+        result = User.query.paginate(page=page, per_page=size)
+        return Resp.OK(UserDTO.from_page(result))
+
+    async def create(self, body: CreateUserRequest):
+        """创建用户"""
+        user = UserService.create(body)
+        return Resp.OK(UserDTO.from_entity(user))
+
+# 挂载到应用
+app.include_router(UserController.router, prefix="/api/v1")
+# → GET  /api/v1/user/list
+# → POST /api/v1/user/create
+```
+
+**规则简要**：
+- 方法名即路由路径
+- 默认注册为 POST，`@get` 标记的方法注册为 GET
+- `_` 开头的方法是私有辅助方法，不会注册为路由
+
+详见 [ResourceController 类视图指南](15_controller_guide.md)。
+
 ## 下一步
 
+- 查看 [ResourceController 类视图指南](15_controller_guide.md)
 - 查看 [DTO 与响应处理规范](webapi项目开发规范/dto_response_guide.md)
 - 查看 [API 开发规范](webapi项目开发规范/development_guide.md)
 - 查看 [ORM 使用指南](03_orm_guide.md)

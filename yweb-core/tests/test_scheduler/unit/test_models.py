@@ -218,8 +218,27 @@ class TestSchedulerJobStatsModel:
 
 
 class TestCreateSchedulerModels:
-    """create_scheduler_models 工厂函数测试"""
-    
+    """create_scheduler_models 工厂函数测试
+
+    注意：本类内的测试会反复调用 `create_scheduler_models(...)`（无前缀 / 自定义表名），
+    这些调用会把 `scheduler_job / scheduler_job_history / scheduler_job_stats` 等表
+    注册进全局 `BaseModel.metadata`，并因 `extend_existing=True` 在同名表上累加 Index。
+    不清理的话，后续任何 `BaseModel.metadata.create_all(engine)` 都会在新 engine 上
+    抛 `index ... already exists`，污染 test_orm 等其他模块（详见 23 号清单 Phase 5B.3）。
+
+    此 autouse fixture 做 metadata 快照 + teardown 移除本类新增的表，恢复干净状态。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolate_metadata(self):
+        from yweb.orm import BaseModel
+
+        pre_tables = set(BaseModel.metadata.tables.keys())
+        yield
+        new_tables = set(BaseModel.metadata.tables.keys()) - pre_tables
+        for name in new_tables:
+            BaseModel.metadata.remove(BaseModel.metadata.tables[name])
+
     def test_create_with_default_prefix(self):
         """测试默认前缀创建"""
         models = create_scheduler_models()

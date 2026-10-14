@@ -388,12 +388,51 @@ class TestSchedulerWithDatabaseHistory:
         # 验证任务执行
         assert len(executed) == 1
         
-        # 验证历史记录（需要查询数据库）
-        history = SchedulerJobHistory.query.filter(
-            SchedulerJobHistory.run_id == "test_run_history"
-        ).first()
+        from yweb.orm import async_db_call
+        history = await async_db_call(
+            lambda: SchedulerJobHistory.query.filter(
+                SchedulerJobHistory.run_id == "test_run_history"
+            ).first()
+        )
         
         # 历史记录必须落库，不能条件跳过
         assert history is not None
         assert history.job_code == "HISTORY_TEST"
         assert history.status == "success"
+
+    @pytest.mark.asyncio
+    async def test_async_executor_records_failure(
+        self, scheduler_with_db, scheduler_db_session, scheduler_models
+    ):
+        """async executor 路径下任务抛异常时历史记录正确落库"""
+        SchedulerJobHistory = scheduler_models.SchedulerJobHistory
+        scheduler = scheduler_with_db
+
+        @scheduler.cron("0 8 * * *", code="FAIL_TEST", name="失败测试")
+        async def failing_job(ctx: JobContext):
+            raise ValueError("intentional failure")
+
+        job_info = scheduler._jobs["FAIL_TEST"]
+        context = JobContext(
+            job_id=job_info["id"],
+            job_code="FAIL_TEST",
+            job_name="失败测试",
+            run_id="test_run_failure",
+            scheduled_time=datetime.now(),
+            start_time=datetime.now(),
+        )
+
+        # _execute_job 内部会 except Exception + record_failure，不往外抛
+        await scheduler._execute_job(job_info, context)
+
+        from yweb.orm import async_db_call
+        history = await async_db_call(
+            lambda: SchedulerJobHistory.query.filter(
+                SchedulerJobHistory.run_id == "test_run_failure"
+            ).first()
+        )
+
+        assert history is not None, "历史记录未落库"
+        assert history.job_code == "FAIL_TEST"
+        assert history.status == "failed"
+        assert "intentional failure" in (history.error or "")

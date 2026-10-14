@@ -24,92 +24,92 @@ from typing import Type, Optional, List, TYPE_CHECKING
 from fastapi import APIRouter, Query
 from pydantic import BaseModel as PydanticBaseModel
 
+from yweb.controller import ResourceController, get, post
 from yweb.response import Resp, PageResponse, ItemResponse, OkResponse
 from yweb.orm import DTO
+
+from ..validators import PasswordValidator
+from ..password import PasswordHelper
 
 if TYPE_CHECKING:
     from ..models import AbstractUser
 
 
-def create_user_router(
-    user_model: Type["AbstractUser"],
-) -> APIRouter:
-    """创建用户管理 CRUD 路由
+# ==================== DTO 定义 ====================
 
-    Args:
-        user_model: 用户模型类（AbstractUser 的子类）
+class UserResponse(DTO):
+    """用户响应（含角色信息）"""
+    id: int = 0
+    username: str = ""
+    name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    is_active: str = "active"
+    created_at: str = ""
+    roles: List[dict] = []
 
-    Returns:
-        APIRouter，包含用户 CRUD 路由
-    """
-    from ..validators import PasswordValidator
-    from ..password import PasswordHelper
+    _field_mapping = {'is_active': 'status'}
+    _value_processors = {
+        'is_active': lambda v: 'active' if v else 'inactive',
+        'roles': lambda v: [
+            {'code': r.code, 'name': r.name} if hasattr(r, 'code')
+            else {'code': str(r), 'name': str(r)}
+            for r in (v or [])
+        ],
+    }
 
-    router = APIRouter()
 
-    # ==================== DTO 定义 ====================
+class UserDetailResponse(DTO):
+    """用户详情响应"""
+    id: int = 0
+    username: str = ""
+    name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    is_active: str = "active"
+    created_at: str = ""
+    last_login_at: Optional[str] = None
 
-    class UserResponse(DTO):
-        """用户响应（含角色信息）"""
-        id: int = 0
-        username: str = ""
-        name: Optional[str] = None
-        email: Optional[str] = None
-        phone: Optional[str] = None
-        is_active: str = "active"
-        created_at: str = ""
-        roles: List[dict] = []
+    _field_mapping = {'is_active': 'status'}
+    _value_processors = {
+        'is_active': lambda v: 'active' if v else 'inactive',
+    }
 
-        _field_mapping = {'is_active': 'status'}
-        _value_processors = {
-            'is_active': lambda v: 'active' if v else 'inactive',
-            'roles': lambda v: [
-                {'code': r.code, 'name': r.name} if hasattr(r, 'code')
-                else {'code': str(r), 'name': str(r)}
-                for r in (v or [])
-            ],
-        }
 
-    class UserDetailResponse(DTO):
-        """用户详情响应"""
-        id: int = 0
-        username: str = ""
-        name: Optional[str] = None
-        email: Optional[str] = None
-        phone: Optional[str] = None
-        is_active: str = "active"
-        created_at: str = ""
-        last_login_at: Optional[str] = None
+class CreateUserRequest(PydanticBaseModel):
+    """创建用户请求"""
+    username: str
+    name: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    password: str
+    status: str = "active"
 
-        _field_mapping = {'is_active': 'status'}
-        _value_processors = {
-            'is_active': lambda v: 'active' if v else 'inactive',
-        }
 
-    class CreateUserRequest(PydanticBaseModel):
-        """创建用户请求"""
-        username: str
-        name: str
-        email: Optional[str] = None
-        phone: Optional[str] = None
-        password: str
-        status: str = "active"
+class UpdateUserRequest(PydanticBaseModel):
+    """更新用户请求"""
+    name: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    status: str
 
-    class UpdateUserRequest(PydanticBaseModel):
-        """更新用户请求"""
-        name: str
-        email: Optional[str] = None
-        phone: Optional[str] = None
-        status: str
 
-    class ResetPasswordRequest(PydanticBaseModel):
-        """重置密码请求"""
-        password: str
+class ResetPasswordRequest(PydanticBaseModel):
+    """重置密码请求"""
+    password: str
 
-    # ==================== 查询接口 ====================
 
-    @router.get("/list", response_model=PageResponse[UserResponse], summary="搜索用户列表")
-    async def list_users(
+# ==================== 控制器 ====================
+
+class UserController(ResourceController):
+    """用户管理控制器（方法名即路由路径）。"""
+
+    prefix = ""
+    user_model = None
+
+    @get(response_model=PageResponse[UserResponse], summary="搜索用户列表")
+    def list(
+        self,
         keyword: Optional[str] = Query(None, description="搜索关键词（用户名、姓名、邮箱、手机号）"),
         status: Optional[str] = Query(None, description="用户状态 (active, inactive)"),
         role: Optional[str] = Query(None, description="角色编码过滤（如 admin, user, external）"),
@@ -127,6 +127,7 @@ def create_user_router(
         elif status == "inactive":
             is_active = False
 
+        user_model = self.user_model
         page_result = user_model.search_with_roles(
             keyword=keyword,
             is_active=is_active,
@@ -136,22 +137,20 @@ def create_user_router(
         )
         return Resp.OK(UserResponse.from_page(page_result))
 
-    @router.get("/get", response_model=ItemResponse[UserDetailResponse], summary="获取用户详情")
-    async def get_user(
-        user_id: int = Query(..., description="用户ID"),
-    ):
+    @get(response_model=ItemResponse[UserDetailResponse], summary="获取用户详情")
+    def get(self, user_id: int = Query(..., description="用户ID")):
         """获取用户详情"""
+        user_model = self.user_model
         user = user_model.get(user_id)
         if not user:
             return Resp.NotFound("用户不存在")
         return Resp.OK(UserDetailResponse.from_entity(user))
 
-    # ==================== 写入接口 ====================
-
-    @router.post("/create", response_model=ItemResponse[UserResponse], summary="创建用户")
-    async def create_user(request: CreateUserRequest):
+    @post(response_model=ItemResponse[UserResponse], summary="创建用户")
+    def create(self, request: CreateUserRequest):
         """创建用户（自动验证 + 密码哈希）"""
         try:
+            user_model = self.user_model
             user = user_model.create_user(
                 username=request.username,
                 password=request.password,
@@ -164,12 +163,14 @@ def create_user_router(
         except ValueError as e:
             return Resp.BadRequest(message=str(e))
 
-    @router.post("/update", response_model=ItemResponse[UserResponse], summary="更新用户信息")
-    async def update_user(
+    @post(response_model=ItemResponse[UserResponse], summary="更新用户信息")
+    def update(
+        self,
         request: UpdateUserRequest,
         user_id: int = Query(..., description="用户ID"),
     ):
         """更新用户信息"""
+        user_model = self.user_model
         user = user_model.get(user_id)
         if not user:
             return Resp.NotFound("用户不存在")
@@ -185,11 +186,10 @@ def create_user_router(
 
         return Resp.OK(UserResponse.from_entity(user), message="用户更新成功")
 
-    @router.post("/enable", response_model=ItemResponse[UserResponse], summary="启用用户")
-    async def enable_user(
-        user_id: int = Query(..., description="用户ID"),
-    ):
+    @post(response_model=ItemResponse[UserResponse], summary="启用用户")
+    def enable(self, user_id: int = Query(..., description="用户ID")):
         """启用用户"""
+        user_model = self.user_model
         user = user_model.get(user_id)
         if not user:
             return Resp.NotFound("用户不存在")
@@ -198,11 +198,10 @@ def create_user_router(
         user.update()
         return Resp.OK(UserResponse.from_entity(user), message="用户启用成功")
 
-    @router.post("/disable", response_model=ItemResponse[UserResponse], summary="禁用用户")
-    async def disable_user(
-        user_id: int = Query(..., description="用户ID"),
-    ):
+    @post(response_model=ItemResponse[UserResponse], summary="禁用用户")
+    def disable(self, user_id: int = Query(..., description="用户ID")):
         """禁用用户"""
+        user_model = self.user_model
         user = user_model.get(user_id)
         if not user:
             return Resp.NotFound("用户不存在")
@@ -211,12 +210,14 @@ def create_user_router(
         user.update()
         return Resp.OK(UserResponse.from_entity(user), message="用户禁用成功")
 
-    @router.post("/reset-password", response_model=OkResponse, summary="重置密码")
-    async def reset_password(
+    @post(path="/reset-password", response_model=OkResponse, summary="重置密码")
+    def reset_password(
+        self,
         request: ResetPasswordRequest,
         user_id: int = Query(..., description="用户ID"),
     ):
         """重置用户密码"""
+        user_model = self.user_model
         user = user_model.get(user_id)
         if not user:
             return Resp.NotFound("用户不存在")
@@ -229,4 +230,18 @@ def create_user_router(
         except ValueError as e:
             return Resp.BadRequest(message=str(e))
 
-    return router
+
+def create_user_router(
+    user_model: Type["AbstractUser"],
+) -> APIRouter:
+    """创建用户管理 CRUD 路由
+
+    注入用户模型后返回 UserController 路由。
+
+    Args:
+        user_model: 用户模型类（AbstractUser 的子类）
+
+    Returns:
+        APIRouter，包含用户 CRUD 路由
+    """
+    return UserController.create_router(user_model=user_model)

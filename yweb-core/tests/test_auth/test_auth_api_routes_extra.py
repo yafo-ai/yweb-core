@@ -68,9 +68,15 @@ class TokenBlacklistStub:
 
     def __init__(self, revoked_tokens=None):
         self.revoked_tokens = set(revoked_tokens or [])
+        self.revoke_token_calls: list[tuple[str, str]] = []
 
     def is_revoked(self, token: str) -> bool:
         return token in self.revoked_tokens
+
+    def revoke_token(self, token: str, reason: str = "") -> bool:
+        self.revoked_tokens.add(token)
+        self.revoke_token_calls.append((token, reason))
+        return True
 
 
 class JWTManagerStub:
@@ -89,6 +95,14 @@ class JWTManagerStub:
                 "refresh_token": "new-refresh",
                 "token_type": "bearer",
             }
+        return None
+
+    def verify_token(self, token: str, raise_on_expired: bool = False):
+        _ = raise_on_expired
+        if token.startswith("access-"):
+            return SimpleNamespace(user_id=int(token.split("-", 1)[1]), token_type="access")
+        if token.startswith("refresh-"):
+            return SimpleNamespace(user_id=int(token.split("-", 1)[1]), token_type="refresh")
         return None
 
 
@@ -296,10 +310,10 @@ class OIDCManagerStub:
     def get_jwks(self):
         return {"keys": [{"kty": "RSA", "kid": "kid-1"}]}
 
-    def get_userinfo_claims(self, user_id: str, scope: str):
+    def get_userinfo(self, user_id, scopes):
         if str(user_id) == "404":
             return None
-        return {"sub": str(user_id), "scope": scope}
+        return {"sub": str(user_id), "scope": " ".join(scopes) if scopes else ""}
 
 
 class OIDCValidateTokenStub:
@@ -393,13 +407,62 @@ class TestAuthApiRouterExtra:
         assert refresh_resp.status_code == 200
         assert refresh_resp.json()["data"]["refresh_token"] == "new-refresh"
 
-        logout_resp = client.post("/auth/logout", params={"user_id": 1})
+        logout_resp = client.post(
+            "/auth/logout",
+            headers={"Authorization": "Bearer access-1"},
+        )
         assert logout_resp.status_code == 200
-        assert auth_service.logout_called_with == 1
+        assert auth_service.logout_called_with is None
 
         kick_resp = client.post("/auth/kick", params={"user_id": 1})
         assert kick_resp.status_code == 200
         assert auth_service.kick_called_with == 1
+
+    def test_logout_requires_current_bearer_and_revokes_only_that_token(self):
+        app = FastAPI()
+        register_exception_handlers(app)
+        auth_service = AuthServiceStub()
+        blacklist = TokenBlacklistStub()
+        app.include_router(
+            create_auth_router(
+                auth_service=auth_service,
+                jwt_manager=JWTManagerStub(),
+                token_blacklist=blacklist,
+            ),
+            prefix="/auth",
+        )
+        client = TestClient(app)
+
+        missing = client.post("/auth/logout")
+        assert missing.status_code == 401
+        assert "未提供访问令牌" in missing.json()["message"]
+
+        query_only = client.post("/auth/logout", params={"user_id": 99})
+        assert query_only.status_code == 401
+        assert auth_service.logout_called_with is None
+        assert blacklist.revoke_token_calls == []
+
+        invalid = client.post(
+            "/auth/logout",
+            headers={"Authorization": "Bearer not-a-token"},
+        )
+        assert invalid.status_code == 401
+        assert "访问令牌无效" in invalid.json()["message"]
+
+        refresh_as_bearer = client.post(
+            "/auth/logout",
+            headers={"Authorization": "Bearer refresh-1"},
+        )
+        assert refresh_as_bearer.status_code == 401
+
+        ok = client.post(
+            "/auth/logout",
+            params={"user_id": 99},
+            headers={"Authorization": "Bearer access-1"},
+        )
+        assert ok.status_code == 200
+        assert blacklist.revoke_token_calls == [("access-1", "user_logout")]
+        assert auth_service.logout_called_with is None
 
     def test_refresh_revoked_token_returns_401(self):
         app = FastAPI()

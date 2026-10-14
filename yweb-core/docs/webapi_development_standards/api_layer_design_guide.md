@@ -442,7 +442,163 @@ async def delete_department(dept_id: int = Query(...)):
 
 ---
 
+## 6. 类视图模式（ResourceController）
+
+除了函数式路由，yweb 还提供 `ResourceController` 类视图来组织 API。两者遵循相同的「瘦 API」原则，选择取决于偏好和场景。
+
+### 6.1 基本写法
+
+```python
+from yweb import Resp
+from yweb.response import PageResponse, ItemResponse
+from yweb.controller import ResourceController, get, post
+
+class DepartmentController(ResourceController):
+    prefix = "/department"
+    tags = ["部门管理"]
+
+    @get(response_model=PageResponse[DepartmentResponse])
+    async def list(self, page: int = 1, size: int = 10):
+        """获取部门列表"""
+        result = DepartmentModel.paginate(page=page, per_page=size)
+        return Resp.OK(DepartmentResponse.from_page(result))
+
+    @post(response_model=ItemResponse[DepartmentResponse])
+    async def create(self, data: DepartmentCreate):
+        """创建部门"""
+        try:
+            dept = org_service.create_dept(data)
+            return Resp.OK(DepartmentResponse.from_entity(dept))
+        except ValueError as e:
+            return Resp.BadRequest(message=str(e))
+```
+
+> 类视图同样满足 [3.0 必须声明 `response_model`](#30-必须声明-response_model)：用 `@get`/`@post` 传参即可。
+
+### 6.2 职责不变
+
+类视图只是路由的**组织方式**不同，「瘦 API」原则完全一致：
+
+| 职责 | 类视图中的体现 |
+|------|-------------|
+| 参数验证 | 方法参数的 type hints / Pydantic Schema |
+| DTO 转换 | `XxxResponse.from_entity()` / `from_page()` |
+| 异常处理 | `try/except ValueError` → `Resp.BadRequest()` |
+| 调用服务层 | `service.create(...)` / `service.update(...)` |
+
+**禁止**在 controller 方法中写业务逻辑（唯一性校验、状态切换、关联处理等），这些仍然属于 Service/Domain 层。
+
+### 6.3 运行时依赖绑定规范
+
+公司内部业务 API 如果使用 `ResourceController`，并且 controller 依赖的 model、service、scheduler 等对象需要在模块初始化或应用装配时传入，必须统一采用 router 工厂绑定：
+
+```python
+from fastapi import APIRouter
+
+from yweb.controller import ResourceController, get
+from yweb.response import Resp, PageResponse
+
+
+class UserController(ResourceController):
+    prefix = ""
+    tags = ["用户管理"]
+    user_model = None
+
+    @get(response_model=PageResponse[UserResponse])
+    def list(self, keyword: str | None = None, page: int = 1, page_size: int = 10):
+        model = self.user_model
+        page_result = model.search(keyword=keyword, page=page, page_size=page_size)
+        return Resp.OK(UserResponse.from_page(page_result))
+
+
+def create_user_router(user_model: type) -> APIRouter:
+    return UserController.create_router(user_model=user_model)
+```
+
+强制要求：
+
+| 规则 | 要求 |
+|------|------|
+| 对外入口 | 暴露 `create_xxx_router(...)`，由应用装配层传入运行时依赖 |
+| 依赖绑定 | 在工厂内调用 `Controller.create_router(name=value)` |
+| 禁止全局注入 | 不允许用 `_xxx_model`、`_scheduler`、`_acl_service` 等模块级变量保存 router 工厂参数 |
+| 禁止 init 注入 | 不允许新增 `init_xxx_controller(...)` 这种修改全局状态的兼容入口 |
+| 显式路径 | 每个 `ResourceController` 必须显式声明 `prefix`，不得省略或依赖默认值；没有额外前缀时也必须写 `prefix = ""` |
+| OpenAPI | 每个对外接口必须声明 `response_model`，保证 Swagger 能推导响应结构 |
+| 薄 API | controller 只做参数接收、DTO 转换、服务调用、响应包装，不写业务规则 |
+| 同步 ORM | 直接调用同步 ORM 的接口写同步 `def`，不要在 `async def` 中直接调用同步数据库方法 |
+
+只有完全不需要运行时依赖的静态 controller，才可以直接挂载 `Controller.router` 或使用 `scan_controllers`。
+
+### 6.4 可选能力组
+
+当一组 API 是否存在取决于运行时配置时，必须把这组能力拆成独立 controller，在 router 工厂中条件挂载，而不是用模块级全局变量或在 controller 内隐藏条件。
+
+拆分的是能力边界，不一定是文件边界；多个小 controller 可以放在同一个 `.py` 文件中，由同一个 `create_xxx_router(...)` 统一组装。最终路径按以下规则拼接：
+
+```text
+最终路径 = 应用/总路由 prefix + include_router prefix + controller prefix + 方法路径
+```
+
+因此 `prefix = ""` 表示 controller 不额外增加路径层级，路径完全由外层 `include_router(prefix=...)` 和方法名决定。
+
+```python
+class APIResourceController(ResourceController):
+    prefix = ""
+    api_resource_model = None
+    permission_model = None
+
+    @get(response_model=PageResponse[APIResourceResponse])
+    def list(self): ...
+
+
+def create_permission_router(permission_model, api_resource_model=None) -> APIRouter:
+    router = APIRouter(prefix="/permission")
+    router.include_router(PermissionController.create_router(permission_model=permission_model))
+
+    if api_resource_model:
+        router.include_router(
+            APIResourceController.create_router(
+                api_resource_model=api_resource_model,
+                permission_model=permission_model,
+            ),
+            prefix="/api-resources",
+        )
+
+    return router
+```
+
+这种写法要求：
+
+| 规则 | 要求 |
+|------|------|
+| 能力边界 | 一个可选能力组拆成一个独立 controller |
+| 文件组织 | 相关小 controller 可以放在同一个 `.py` 文件里，避免过度拆文件 |
+| 条件位置 | 条件判断只放在 `create_xxx_router(...)` 工厂层 |
+| Swagger | 未 include 的能力组不会出现在 Swagger/OpenAPI 中 |
+| 路径冲突 | 多个 controller 可以挂同一个前缀，但不能产生相同的 HTTP method + 最终 path |
+| 大 controller | 不要在 controller 方法内部用运行时 `if/else` 隐藏端点是否存在 |
+
+### 6.5 何时用哪种
+
+| 场景 | 推荐 |
+|------|------|
+| 标准 CRUD 资源（用户、部门、订单...） | ResourceController |
+| 需要 `response_model` / `status_code` / 方法级依赖 | ResourceController（`@get`/`@post` 传参） |
+| 路由集合固定，但 model/service/scheduler 运行时传入 | ResourceController + `create_xxx_router(...)` |
+| 某一组可选 API 运行时才决定是否挂载 | 独立 ResourceController + 工厂层条件 `include_router(...)`；可同文件多 controller |
+| 多个方法各自有运行时开关 | 优先按能力组拆成多个 ResourceController，再由工厂层条件挂载 |
+| 特殊协议端点（webhook、OAuth callback） | 函数式路由 |
+| 拆分后明显更难读、或协议路径强约束 | 函数式路由 |
+| 需要 RESTful 路径参数（`/{id}`）或 PUT/DELETE/PATCH | 函数式路由 |
+| 新项目、统一风格 | ResourceController |
+
+两种方式可以在同一项目中共存。详见 [ResourceController 类视图指南](../15_controller_guide.md)。
+
+---
+
 ## 相关文档
 
+- [ResourceController 类视图指南](../15_controller_guide.md) - 类视图完整用法
 - [DTO 与响应处理规范](dto_response_guide.md) - DTO 的详细配置和高级用法
 - [Model 与 Service 层设计规范](model_and_service_design_guide.md) - 服务层设计规范

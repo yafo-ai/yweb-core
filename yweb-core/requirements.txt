@@ -25,5 +25,8 @@ aiohttp>=3.8.0
 # LDAP 支持（可选，用于 auth.ldap 模块）
 # ldap3>=2.9.0
 
+# 限流支持（用于 ratelimit 模块）
+slowapi>=0.1.9
+
 # YAML 配置支持（可选，用于 config.loader）
 pyyaml>=6.0

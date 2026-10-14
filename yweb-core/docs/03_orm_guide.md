@@ -1150,10 +1150,39 @@ with ThreadPoolExecutor(max_workers=5) as executor:
 
 | 场景 | 推荐方式 |
 |-----|---------|
-| FastAPI 路由 | `RequestIDMiddleware` 或 `Depends(get_db)` |
-| 脚本/定时任务 | `db_session_scope()` 或 `@with_db_session()` |
+| FastAPI `def` 路由（纯 DB） | `RequestIDMiddleware` 或 `Depends(get_db)` |
+| FastAPI `async def` 路由 | `await async_db_call(...)` 包装 |
+| FastAPI `async def` 路由 — 写路径 / 多语句 | `await async_db_call(...)` 包装 |
+| 脚本/定时任务（含 async 入口） | `db_session_scope()` 或 `@with_db_session()`（async 下内部自动 `allow_sync`） |
 | 线程池任务 | `db_session_scope()` 或 `@with_db_session()` |
-| 异步任务 | `@with_db_session()`（支持异步函数） |
+
+> 纯 DB 操作推荐 `def` 路由（FastAPI 自动放入线程池）。需要混合 async I/O 时使用
+> `await async_db_call(...)` 包装。`BackgroundTasks` 中也可安全使用（仍在 middleware ASGI 生命周期内）。
+>
+> **注意**：`async_db_call()` 依赖 `RequestIDMiddleware` 管理 session。
+> 定时任务、脚本等非 HTTP 请求上下文中应使用 `db_session_scope()` 自行管理 session。
+> 详见 [数据库会话文档](orm_docs/12_db_session.md)。
+
+### 10.1.1 async 路由中使用 ORM
+
+在 `async def` 路由中直接访问 `Model.query` 会抛出 `SynchronousOnlyOperation`。
+推荐使用 `def` 路由或 `async_db_call()` 包装：
+
+```python
+# 推荐：def 路由（最简单）
+@app.get("/users")
+def list_users():
+    return User.query.filter(User.is_active.is_(True)).all()
+
+# 需要混合 async I/O 时
+@app.get("/users")
+async def list_users():
+    users = await async_db_call(
+        lambda: User.query.filter(User.is_active.is_(True)).all()
+    )
+    extra = await some_async_call()
+    return {"users": users, "extra": extra}
+```
 
 ### 10.2 提交策略
 
@@ -1269,6 +1298,15 @@ def set_tenant_id(mapper, connection, target):
 | `@with_db_session()` | session 装饰器 |
 | `on_request_end()` | 清理 session |
 | `db_manager._set_request_id()` | 设置请求 ID（内部 API） |
+| `await async_db_call(func, ...)` | 在线程池中执行同步 DB 操作（async def 路由用） |
+
+### 异步安全
+
+| API | 说明 |
+|-----|------|
+| `SynchronousOnlyOperation` | async 上下文中调用同步 ORM 时抛出的异常 |
+| `check_async_safety()` | 手动检测是否在 async 上下文中（框架自动调用） |
+| `YWEB_ASYNC_SAFETY` 环境变量 | 控制检测行为：`error` / `warn` / `off` |
 
 ### 模型方法
 

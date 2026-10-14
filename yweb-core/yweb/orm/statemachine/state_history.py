@@ -223,9 +223,10 @@ class StateHistoryMixin:
             except (TypeError, ValueError):
                 pass
         
-        # 保存记录
+        # 保存记录（commit=False：历史行进 session，随主事务/调用方统一提交；
+        # transition_to(save=True) 路径末尾的 self.save() 会一并提交，行为不变）
         if hasattr(record, 'save'):
-            record.save()
+            record.save(commit=False)
     
     def get_state_history(
         self, 

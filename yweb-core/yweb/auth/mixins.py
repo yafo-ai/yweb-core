@@ -23,6 +23,21 @@ from sqlalchemy import Boolean, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 
+def _as_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    """把从 DB 读回的 datetime 规整为 tz-aware UTC。
+
+    背景：列声明 ``DateTime(timezone=True)`` 在 SQLite / MySQL 上会回落为
+    naive datetime，直接和 ``datetime.now(timezone.utc)`` 比较会抛
+    ``TypeError: can't compare offset-naive and offset-aware datetimes``。
+    此函数把 naive 视为 UTC 挂上 tzinfo，aware 原样返回，None 原样返回。
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 class LockableMixin:
     """可锁定用户 Mixin
     
@@ -142,7 +157,7 @@ class LockableMixin:
             # 永久锁定
             return False
         
-        return datetime.now(timezone.utc) >= self.locked_until
+        return datetime.now(timezone.utc) >= _as_utc(self.locked_until)
     
     def auto_unlock_if_expired(self, commit: bool = True) -> bool:
         """如果锁定已过期则自动解锁
@@ -364,7 +379,7 @@ class PasswordMixin:
         if not self.password_changed_at:
             return True
         
-        expires_at = self.password_changed_at + timedelta(days=self.password_expires_days)
+        expires_at = _as_utc(self.password_changed_at) + timedelta(days=self.password_expires_days)
         return datetime.now(timezone.utc) >= expires_at
     
     def require_password_change(self, commit: bool = True) -> None:

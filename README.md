@@ -147,6 +147,29 @@ class UserProfile(BaseModel):
 # on_delete 选项：DELETE(级联删除) / SET_NULL(置空) / UNLINK(解除关联) / DO_NOTHING
 ```
 
+### 异步路由 —— 推荐 `def`，混合 async I/O 用 `async_db_call`
+
+ORM 基于同步 Session。`async def` 路由里直接调 `User.query.all()` 会阻塞事件循环，框架内置的
+异步安全检测会在运行时拦截并给出修复指引（`SynchronousOnlyOperation`）。
+
+```python
+# ✅ 纯 DB：用 def，FastAPI 自动放线程池（最常见）
+@app.get("/users")
+def list_users():
+    return User.query.all()
+
+# ✅ 需要混合 async I/O：用 async_db_call 把 ORM 操作挪到线程池
+from yweb.orm import async_db_call
+
+@app.get("/users")
+async def list_users():
+    users = await async_db_call(lambda: User.query.filter_by(is_active=True).all())
+    extra = await http_client.get("...")
+    return {"users": users, "extra": extra}
+```
+
+> 详细用法见 [yweb-core/README_DEV.md#异步路由注意事项](yweb-core/README_DEV.md#异步路由注意事项)。
+
 ### 统一响应 —— Resp 快捷类
 
 所有 API 返回统一格式，前端无需猜测响应结构：
@@ -353,7 +376,7 @@ JWT、API Key、Session、OAuth 2.0、OIDC、MFA（多因素）、LDAP/AD ——
 ### 权限管理 —— RBAC 框架
 
 ```python
-from yweb.permission import require_permission, require_role
+from yweb.rbac import require_permission, require_role
 
 @app.get("/users")
 def list_users(user=Depends(require_permission("user:list"))):
@@ -559,6 +582,60 @@ class CreateUserRequest(BaseModel):
     age: Range(18, 120)                     # 范围 18-120
 ```
 
+### Agent 内部工具调用协议 —— 解析、构建与格式说明
+
+提供三项能力：
+
+1. **解析（parser）**：`command` 文本 → `ParsedCommand`（工具名 + 参数）；
+2. **构建（builder）**：结构化参数 → `command=|<|...|>|` 文本（`parse` 的逆操作）；
+3. **格式说明（prompt）**：工具描述 → 指令格式说明文本（供 LLM 提示词拼接）。
+
+```python
+from yweb.agent.command import build_command, CallValue, parse_command_output, CommandPromptBuilder
+
+# 1) 文本 → 结构化
+commands = parse_command_output(llm_output_text)   # List[ParsedCommand]
+for cmd in commands:
+    process(cmd.toolname, cmd.args)
+
+# 2) 结构化 → command 文本（嵌套对象用 CallValue）
+dsl = build_command("invoke", items=[
+    CallValue("item", {"name": "A", "text": "..."}),
+])
+
+# 3) 生成格式说明，供提示词拼接
+prompt = CommandPromptBuilder.function_prompt(
+    func_name="rag_search",
+    description="知识库检索工具",
+    command_example='rag_search(querys=["问题"])',
+)
+```
+
+**函数式指令 DSL** —— 一套语法（函数用 `()`、数组用 `[]`），比 JSON 对象更利于小模型稳定生成：
+
+```text
+command=|<|invoke(
+    items=[
+        item(
+            name="A"
+            text="提供操作步骤"
+        )
+        record(
+            id="B"
+            value="排查异常"
+        )
+    ]
+)|>|
+
+command=|<|run_script(script=@artifact("scripts/query.sql"))|>|   # @artifact 引用外部资源，不内联长文本
+```
+
+- 嵌套对象统一为函数调用 `item(...)` / `record(...)` → `CallValue`，参数用**换行或逗号**分隔（同行空格不切分）
+- `@artifact("path")` → `ArtifactRef`（只产生引用标记，不读取文件）
+- 其余值按字面量解析（字符串/数字/列表/字典）
+
+> 详细规范见 AI 编程 Skill：`.cursor/skills/yweb-agent-command/SKILL.md`。
+
 ---
 
 ## 灵活扩展 —— Mixin 混入，需要时加一行继承
@@ -658,8 +735,9 @@ yweb-core/
 ├── yweb/                     # 核心包
 │   ├── orm/                  # ORM（Active Record、分页、软删除、Mixin）
 │   ├── auth/                 # 认证（JWT 双 Token、setup_auth 一键启用）
-│   ├── permission/           # 权限（RBAC、角色继承）
+│   ├── rbac/                 # 权限（RBAC、角色继承）
 │   ├── organization/         # 组织管理（setup_organization 一键启用）
+│   ├── agent/                # Agent 相关基础能力（command 协议子模块）
 │   ├── cache/                # 缓存（@cached 装饰器、自动失效）
 │   ├── scheduler/            # 定时任务（Cron / Interval / Once、Builder 模式）
 │   ├── response/             # 统一响应（Resp 快捷类、DTO）

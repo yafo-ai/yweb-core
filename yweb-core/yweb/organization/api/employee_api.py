@@ -179,7 +179,7 @@ def create_employee_crud_router(
         summary="获取员工列表",
         description="获取员工列表，支持按组织、部门筛选"
     )
-    async def list_employees(
+    def list_employees(
         org_id: Optional[int] = Query(None, description="按组织筛选"),
         dept_id: Optional[int] = Query(None, description="按部门筛选"),
         keyword: Optional[str] = Query(None, description="按姓名/手机号搜索"),
@@ -251,7 +251,7 @@ def create_employee_crud_router(
         summary="获取员工详情",
         description="根据员工ID获取详情（包含组织和部门信息）"
     )
-    async def get_employee(
+    def get_employee(
         employee_id: int = Query(..., description="员工ID"),
     ):
         """获取员工详情"""
@@ -269,7 +269,7 @@ def create_employee_crud_router(
         summary="创建员工",
         description="创建新的员工"
     )
-    async def create_employee(data: EmployeeCreate):
+    def create_employee(data: EmployeeCreate):
         """创建员工"""
         try:
             emp = org_service.create_employee(
@@ -293,7 +293,7 @@ def create_employee_crud_router(
         summary="更新员工",
         description="更新员工信息"
     )
-    async def update_employee(
+    def update_employee(
         data: EmployeeUpdate,
         employee_id: int = Query(..., description="员工ID"),
     ):
@@ -311,7 +311,7 @@ def create_employee_crud_router(
         summary="删除员工",
         description="删除员工（软删除，自动级联清理关联数据）"
     )
-    async def delete_employee(
+    def delete_employee(
         employee_id: int = Query(..., description="员工ID"),
     ):
         """删除员工"""
@@ -329,7 +329,7 @@ def create_employee_crud_router(
         summary="员工加入组织",
         description="将员工添加到指定组织"
     )
-    async def add_employee_to_org(data: EmployeeOrgRelCreate):
+    def add_employee_to_org(data: EmployeeOrgRelCreate):
         """员工加入组织"""
         try:
             rel = org_service.add_employee_to_org(
@@ -350,7 +350,7 @@ def create_employee_crud_router(
         summary="员工离开组织",
         description="将员工从指定组织移除（同时移除该组织下的部门关联）"
     )
-    async def remove_employee_from_org(
+    def remove_employee_from_org(
         employee_id: int = Query(..., description="员工ID"),
         org_id: int = Query(..., description="组织ID"),
     ):
@@ -367,7 +367,7 @@ def create_employee_crud_router(
         summary="设置主组织",
         description="将指定组织设为员工的主组织"
     )
-    async def set_primary_org(
+    def set_primary_org(
         employee_id: int = Query(..., description="员工ID"),
         org_id: int = Query(..., description="组织ID"),
     ):
@@ -386,7 +386,7 @@ def create_employee_crud_router(
         summary="员工加入部门",
         description="将员工添加到指定部门（需先加入该部门所属组织）"
     )
-    async def add_employee_to_dept(data: EmployeeDeptRelCreate):
+    def add_employee_to_dept(data: EmployeeDeptRelCreate):
         """员工加入部门"""
         try:
             rel = org_service.add_employee_to_dept(
@@ -404,7 +404,7 @@ def create_employee_crud_router(
         summary="员工离开部门",
         description="将员工从指定部门移除（同时移除负责人身份）"
     )
-    async def remove_employee_from_dept(
+    def remove_employee_from_dept(
         employee_id: int = Query(..., description="员工ID"),
         dept_id: int = Query(..., description="部门ID"),
     ):
@@ -421,7 +421,7 @@ def create_employee_crud_router(
         summary="设置主部门",
         description="将指定部门设为员工的主部门（主部门必须属于主组织）"
     )
-    async def set_primary_dept(
+    def set_primary_dept(
         employee_id: int = Query(..., description="员工ID"),
         dept_id: int = Query(..., description="部门ID"),
     ):
@@ -440,7 +440,7 @@ def create_employee_crud_router(
         summary="修改雇佣状态",
         description="修改员工在指定组织中的雇佣状态（-1-离职，0-停职，1-待入职，2-试用，3-在职）"
     )
-    async def update_org_status(
+    def update_org_status(
         employee_id: int = Query(..., description="员工ID"),
         org_id: int = Query(..., description="组织ID"),
         status: int = Query(..., description="新状态（-1-离职，0-停职，1-待入职，2-试用，3-在职）"),
@@ -460,7 +460,7 @@ def create_employee_crud_router(
         summary="修改账号状态",
         description="修改员工的账号状态（1-激活，-1-禁用），直接操作关联的用户账号"
     )
-    async def update_account_status(
+    def update_account_status(
         employee_id: int = Query(..., description="员工ID"),
         account_status: int = Query(..., description="新账号状态（-1-已禁用，1-已激活）"),
     ):

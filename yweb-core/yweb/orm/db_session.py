@@ -11,6 +11,26 @@
 - db_session_scope(): 非 HTTP 场景的上下文管理器
 - with_db_session(): 装饰器方式管理 session
 - on_request_end(): 请求结束清理
+- async_db_call(): 在 async def 路由中安全执行同步 DB 操作（线程池桥接）
+
+异步路由使用指南:
+
+    ORM 层基于同步 Session，在 async def 路由中直接调用会阻塞事件循环。
+    推荐以下两种方式：
+
+    方式1（推荐）—— 使用 def 路由，FastAPI 自动放入线程池::
+
+        @app.get("/users")
+        def get_users(db: Session = Depends(get_db)):
+            return User.query.all()
+
+    方式2 —— 需要混合 async I/O 时，使用 async_db_call()::
+
+        @app.get("/users")
+        async def get_users():
+            users = await async_db_call(User.get_all)
+            extra = await some_async_http_call()
+            return {"users": users, "extra": extra}
 
 内部 API（不建议外部使用）:
 - db_manager.get_session(): 获取 scoped session（低级）
@@ -18,7 +38,7 @@
 - db_manager._get_request_id(): 获取请求ID
 """
 
-from typing import Optional, Callable, Any, TypeVar, Generator
+from typing import Callable, Any, TypeVar, Generator
 from uuid import uuid4
 import logging
 import asyncio
@@ -47,6 +67,8 @@ __all__ = [
     'db_session_scope',
     'with_db_session',
     'on_request_end',
+    # 异步支持
+    'async_db_call',
 ]
 
 
@@ -315,10 +337,13 @@ class DatabaseManager:
         self._session_scope = scoped_session(self._session_maker, scopefunc=scopefunc)
         
         # 自动设置 ORM query 属性（延迟导入避免循环依赖）
+        # AsyncSafeQueryProperty：在 async 上下文访问 Model.query 时抛出
+        # SynchronousOnlyOperation，引导开发者使用 def 路由或 async_db_call()
         if auto_setup_query:
             from .core_model import CoreModel
-            CoreModel.query = self._session_scope.query_property()
-            logger.info("CoreModel.query 属性已自动设置")
+            from .async_safety import AsyncSafeQueryProperty
+            CoreModel.query = AsyncSafeQueryProperty(self._session_scope.query_property())
+            logger.info("CoreModel.query 属性已自动设置（AsyncSafeQueryProperty）")
         
         logger.info("数据库session创建成功")
         
@@ -356,6 +381,9 @@ class DatabaseManager:
         """
         if self._session_scope is None:
             raise RuntimeError("数据库未初始化，请先调用 init_database()")
+        
+        from .async_safety import check_async_safety
+        check_async_safety()
         
         session = self._session_scope()
         
@@ -539,51 +567,73 @@ def db_session_scope(
     auto_commit: bool = True
 ) -> Generator[Session, None, None]:
     """非 HTTP 场景的 session 上下文管理器
-    
+
     自动管理 session 生命周期，包括：
     - 设置请求ID（用于日志追踪）
     - 自动提交或回滚
     - 自动清理 session
-    
+
     Args:
-        request_id: 请求ID，用于日志追踪，不传则自动生成
+        request_id: 请求ID前缀，用于日志追踪。
+                   实际ID格式为 "{前缀}-{随机6位}"，保证每次调用唯一。
+                   不传则使用 "scope" 作为前缀
         auto_commit: 是否自动提交，默认 True
-    
+
     Yields:
         Session 对象
-    
+
+    同步/异步上下文：
+        此上下文管理器在 **async 上下文**下也可直接使用 —— 内部会自动启用
+        :func:`allow_sync` bypass。语义：使用者已通过显式开 scope 声明"这段代码
+        允许执行同步 DB 操作"（例如一次性脚本、async startup 初始化、
+        APScheduler 定时任务协程等）。
+
+        .. warning::
+            虽然 scope 内可以直接用同步 ORM，但这会阻塞事件循环。
+            **不要在 FastAPI 请求处理路由中使用 db_session_scope**，
+            那里应该用 ``def`` 路由或 :func:`async_db_call`。
+
     使用示例:
-        # 脚本中
+        # 脚本中（同步）
         from yweb.orm import db_session_scope
-        
+
         with db_session_scope() as session:
             user = User(name="test")
             session.add(user)
         # 自动提交并清理，无需手动调用
-        
+
+        # async 脚本 / 定时任务
+        async def daily_report_job():
+            with db_session_scope(request_id="daily-report") as session:
+                # 同步 ORM 可直接用（scope 内部已 allow_sync bypass）
+                users = User.query.all()
+                ...
+
         # 手动控制提交
         with db_session_scope(auto_commit=False) as session:
             user = session.query(User).first()
             user.name = "updated"
-            session.commit()  # 手动提交
-        
-        # 带请求ID（便于日志追踪）
-        with db_session_scope(request_id="daily-report") as session:
-            # 业务逻辑...
-            pass
-    """
-    # 设置请求ID
-    db_manager._set_request_id(request_id)
-    session = db_manager.get_session()
-    try:
-        yield session
-        if auto_commit:
             session.commit()
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        on_request_end()
+    """
+    from .async_safety import allow_sync
+
+    # 整个 scope 生命周期内启用 allow_sync bypass —— 覆盖：
+    # - get_session() 里的 check_async_safety()
+    # - 用户在 scope 内的同步 ORM 操作（.query / .commit 等）
+    # - on_request_end() 里任何潜在的 async_safety 检测
+    with allow_sync():
+        prefix = request_id or "scope"
+        db_manager._set_request_id(f"{prefix}-{uuid4().hex[:6]}")
+        session = db_manager.get_session()
+        try:
+            yield session
+            if auto_commit:
+                session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            on_request_end()
 
 
 def with_db_session(
@@ -596,8 +646,9 @@ def with_db_session(
     支持同步和异步函数。
     
     Args:
-        request_id: 请求ID，用于日志追踪。
-                   不传则使用 "{函数名}-{随机ID}" 格式自动生成
+        request_id: 请求ID前缀，用于日志追踪。
+                   实际ID格式为 "{前缀}-{随机6位}"，保证每次调用唯一。
+                   不传则使用函数名作为前缀
         auto_commit: 是否自动提交，默认 True
     
     使用示例:
@@ -643,14 +694,11 @@ def with_db_session(
             await some_async_operation(users)
     """
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
-        # 生成请求ID
-        func_request_id = request_id or f"{func.__name__}-{{rand}}"
+        prefix = request_id or func.__name__
         
         @wraps(func)
         def sync_wrapper(*args, **kwargs) -> T:
-            # 替换 {rand} 占位符
-            actual_request_id = func_request_id.replace("{rand}", uuid4().hex[:6])
-            db_manager._set_request_id(actual_request_id)
+            db_manager._set_request_id(f"{prefix}-{uuid4().hex[:6]}")
             
             session = db_manager.get_session()
             try:
@@ -666,24 +714,81 @@ def with_db_session(
         
         @wraps(func)
         async def async_wrapper(*args, **kwargs) -> T:
-            # 替换 {rand} 占位符
-            actual_request_id = func_request_id.replace("{rand}", uuid4().hex[:6])
-            db_manager._set_request_id(actual_request_id)
-            
-            session = db_manager.get_session()
-            try:
-                result = await func(session, *args, **kwargs)
-                if auto_commit:
-                    session.commit()
-                return result
-            except Exception:
-                session.rollback()
-                raise
-            finally:
-                on_request_end()
+            from .async_safety import allow_sync
+
+            with allow_sync():
+                db_manager._set_request_id(f"{prefix}-{uuid4().hex[:6]}")
+                session = db_manager.get_session()
+                try:
+                    result = await func(session, *args, **kwargs)
+                    if auto_commit:
+                        session.commit()
+                    return result
+                except Exception:
+                    session.rollback()
+                    raise
+                finally:
+                    on_request_end()
         
         if asyncio.iscoroutinefunction(func):
             return async_wrapper
         return sync_wrapper
     
     return decorator
+
+
+async def async_db_call(func: Callable[..., T], *args, **kwargs) -> T:
+    """在线程池中执行同步数据库操作，避免阻塞事件循环
+
+    当你需要在 async def 路由中调用同步的 ORM 操作时使用此函数。
+    内部通过 Starlette 的 run_in_threadpool 将同步调用移交到线程池执行。
+
+    此函数依赖 ``RequestIDMiddleware`` 管理 session 生命周期。
+    在非 HTTP 请求上下文（定时任务、脚本等）中调用会输出警告日志，
+    此时应改用 ``db_session_scope()``。
+
+    .. note::
+        如果路由不涉及其他 async I/O，推荐直接使用 ``def`` 路由——
+        FastAPI 会自动将同步路由放入线程池，无需手动包裹。
+
+    Args:
+        func: 同步的可调用对象（函数或 lambda）
+        *args: 传给 func 的位置参数
+        **kwargs: 传给 func 的关键字参数
+
+    Returns:
+        func 的返回值
+
+    使用示例::
+
+        from yweb.orm import async_db_call
+
+        @app.get("/users")
+        async def get_users():
+            users = await async_db_call(User.get_all)
+            return users
+
+        @app.get("/user/{user_id}")
+        async def get_user(user_id: int):
+            user = await async_db_call(User.get, user_id)
+            extra = await some_async_http_call(user.id)
+            return {"user": user.to_dict(), "extra": extra}
+
+        # 也支持 lambda 包裹更复杂的查询
+        @app.get("/active-users")
+        async def get_active_users():
+            users = await async_db_call(
+                lambda: User.query.filter_by(is_active=True).all()
+            )
+            return [u.to_dict() for u in users]
+    """
+    if not db_manager._request_id_explicit.get():
+        func_name = getattr(func, '__name__', None) or getattr(func, '__qualname__', repr(func))
+        _logger.warning(
+            "async_db_call(%s) 在非 HTTP 请求上下文中调用，"
+            "session 不会被自动清理，可能导致连接泄漏。"
+            "建议使用 db_session_scope() 管理 session。",
+            func_name,
+        )
+    from starlette.concurrency import run_in_threadpool
+    return await run_in_threadpool(func, *args, **kwargs)

@@ -1,6 +1,6 @@
 ---
 description: 实现用户登录、JWT Token 处理、权限校验、角色管理、组织架构、OAuth 集成等认证授权功能时自动激活。
-globs: yweb-core/yweb/auth/**/*.py, yweb-core/yweb/permission/**/*.py, yweb-core/yweb/organization/**/*.py, **/domain/auth/**/*.py, **/domain/permission/**/*.py, **/api/v1/auth.py, **/api/v1/permission.py, **/api/v1/role.py, **/api/v1/oauth2.py, **/api/v1/sso_*.py
+globs: yweb-core/yweb/auth/**/*.py, yweb-core/yweb/rbac/**/*.py, yweb-core/yweb/organization/**/*.py, **/domain/auth/**/*.py, **/domain/permission/**/*.py, **/api/v1/auth.py, **/api/v1/permission.py, **/api/v1/role.py, **/api/v1/oauth2.py, **/api/v1/sso_*.py
 ---
 
 # YWeb 认证授权规范

@@ -1021,7 +1021,7 @@ class CoreModel(IdModel):
         
         from sqlalchemy.orm.query import Query
         from sqlalchemy.sql.selectable import Select
-        
+
         if isinstance(query_or_stmt, Query):
             # 处理Query对象
             query = query_or_stmt

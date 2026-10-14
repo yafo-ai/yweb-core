@@ -1110,18 +1110,20 @@ def get_scheduler(request: Request) -> Scheduler:
     """获取调度器实例"""
     return request.app.state.scheduler
 
-# 在路由中使用
-@app.get("/jobs")
+# 在自定义路由中使用（get_jobs() 返回 dict 列表）
+@app.get("/my/jobs")
 def list_jobs(scheduler: Scheduler = Depends(get_scheduler)):
     return [
         {
-            "id": job.id,
-            "name": job.name,
-            "next_run": job.next_run_time,
+            "code": job.get("code"),
+            "name": job.get("name"),
+            "next_run_time": job.get("next_run_time"),
         }
         for job in scheduler.get_jobs()
     ]
 ```
+
+> 框架已内置完整的管理 API（见下文「管理 API」），常规场景无需自己写这些路由。
 
 ---
 
@@ -1243,81 +1245,51 @@ async def on_job_missed(event: JobEvent):
 
 ### 管理 API（可选）
 
+框架在 `yweb/scheduler/api/` 内置了一组管理 API，基于 `ResourceController` 类视图实现，采用**动词风格路径**（只使用 GET/POST），任务用 `code`、执行记录用 `run_id` 作为查询参数。无需手写路由，直接挂载即可：
+
 ```python
-# yweb/scheduler/api/
+from fastapi import FastAPI
+from yweb.scheduler import Scheduler, create_scheduler_router, setup_scheduler_api, create_scheduler_models
 
-from fastapi import APIRouter, Depends, HTTPException
-from yweb import Resp, Scheduler
+app = FastAPI()
+scheduler = Scheduler()
+scheduler_models = create_scheduler_models()
 
-router = APIRouter(prefix="/scheduler", tags=["定时任务"])
+# 方式1：一行挂载（推荐）
+setup_scheduler_api(
+    app,
+    scheduler,
+    history_model=scheduler_models.SchedulerJobHistory,
+    prefix="/api/scheduler",
+)
 
-@router.get("/jobs")
-async def list_jobs(scheduler: Scheduler = Depends(get_scheduler)):
-    """获取所有任务"""
-    jobs = scheduler.get_jobs()
-    return Resp.OK(data=[
-        {
-            "id": job.id,
-            "name": job.name,
-            "trigger": str(job.trigger),
-            "next_run_time": job.next_run_time,
-            "is_paused": job.next_run_time is None,
-        }
-        for job in jobs
-    ])
-
-@router.post("/jobs/{job_id}/run")
-async def run_job(job_id: str, scheduler: Scheduler = Depends(get_scheduler)):
-    """立即执行任务"""
-    job = scheduler.get_job(job_id)
-    if not job:
-        return Resp.NotFound(message=f"任务 {job_id} 不存在")
-    
-    scheduler.run_job(job_id)
-    return Resp.OK(message=f"任务 {job_id} 已触发执行")
-
-@router.post("/jobs/{job_id}/pause")
-async def pause_job(job_id: str, scheduler: Scheduler = Depends(get_scheduler)):
-    """暂停任务"""
-    scheduler.pause_job(job_id)
-    return Resp.OK(message=f"任务 {job_id} 已暂停")
-
-@router.post("/jobs/{job_id}/resume")
-async def resume_job(job_id: str, scheduler: Scheduler = Depends(get_scheduler)):
-    """恢复任务"""
-    scheduler.resume_job(job_id)
-    return Resp.OK(message=f"任务 {job_id} 已恢复")
-
-@router.delete("/jobs/{job_id}")
-async def delete_job(job_id: str, scheduler: Scheduler = Depends(get_scheduler)):
-    """删除任务"""
-    scheduler.remove_job(job_id)
-    return Resp.OK(message=f"任务 {job_id} 已删除")
-
-@router.get("/history")
-async def get_history(
-    job_id: Optional[str] = None,
-    status: Optional[str] = None,
-    limit: int = 50,
-):
-    """获取执行历史"""
-    query = SchedulerJobHistory.query
-    
-    if job_id:
-        query = query.filter_by(job_id=job_id)
-    if status:
-        query = query.filter_by(status=status)
-    
-    history = query.order_by(SchedulerJobHistory.start_time.desc()).limit(limit).all()
-    
-    return Resp.OK(data=[h.to_dict() for h in history])
-
-@router.get("/stats")
-async def get_stats(scheduler: Scheduler = Depends(get_scheduler)):
-    """获取执行统计"""
-    stats = scheduler.get_stats()
-    return Resp.OK(data=stats)
+# 方式2：手动创建路由（更灵活，可加权限依赖）
+router = create_scheduler_router(
+    scheduler,
+    history_model=scheduler_models.SchedulerJobHistory,
+    dependencies=[require_login],
+)
+app.include_router(router, prefix="/api/scheduler")
 ```
+
+挂载后自动提供以下端点（以 `prefix=/api/scheduler` 为例）：
+
+| 方法 | 路径 | 说明 | 主要参数 |
+|------|------|------|---------|
+| GET  | `/api/scheduler/jobs/list`        | 获取所有任务（过滤子任务） | — |
+| GET  | `/api/scheduler/jobs/get`         | 获取任务详情 | `code` |
+| POST | `/api/scheduler/jobs/run`         | 立即执行任务 | `code` |
+| POST | `/api/scheduler/jobs/pause`       | 暂停任务 | `code` |
+| POST | `/api/scheduler/jobs/resume`      | 恢复任务 | `code` |
+| POST | `/api/scheduler/jobs/delete`      | 删除任务 | `code` |
+| GET  | `/api/scheduler/executions/list`  | 查询执行历史（分页） | `job_code` / `status` / `start_date` / `end_date` / `page` / `page_size` |
+| GET  | `/api/scheduler/executions/get`   | 获取执行详情 | `run_id` |
+| GET  | `/api/scheduler/stats`            | 获取调度器统计 | — |
+| GET  | `/api/scheduler/dashboard`        | 获取仪表板数据 | — |
+| GET  | `/api/scheduler/status`           | 获取调度器运行状态 | — |
+| POST | `/api/scheduler/cleanup`          | 清理过期历史 | `days` |
+
+> 实现见 `yweb/scheduler/api/`（`JobController` / `ExecutionController` / `StatsController`）。执行历史相关端点需传入 `history_model` 才会返回真实数据，否则降级为空结果。
 
 ---
 
@@ -1409,27 +1381,19 @@ stats = scheduler.get_stats(
 
 ### 统计面板数据
 
+内置的 `GET /dashboard` 端点（见上文「管理 API」）由 `StatsController.dashboard` 提供，返回按时间段聚合的概览数据：
+
 ```python
-@router.get("/dashboard")
-async def get_dashboard(scheduler: Scheduler = Depends(get_scheduler)):
-    """获取仪表板数据"""
-    return Resp.OK(data={
-        # 概览
-        "overview": scheduler.get_stats(),
-        
-        # 最近执行
-        "recent_executions": scheduler.get_recent_executions(limit=10),
-        
-        # 失败任务
-        "failed_jobs": scheduler.get_failed_jobs(hours=24),
-        
-        # 即将执行
-        "upcoming_jobs": scheduler.get_upcoming_jobs(limit=10),
-        
-        # 执行趋势（最近7天）
-        "trend": scheduler.get_execution_trend(days=7),
-    })
+# GET /api/scheduler/dashboard 响应 data 结构（DashboardResponse）
+{
+    "today": {...},            # 今日统计
+    "yesterday": {...},        # 昨日统计
+    "this_week": {...},        # 本周统计
+    "recent_failures": [...],  # 最近失败记录
+}
 ```
+
+数据来源于历史管理器（`scheduler._get_history_manager().get_dashboard_data()`）；未启用历史记录（未传 `history_model`）时返回空的默认结构。
 
 ---
 
