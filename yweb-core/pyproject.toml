@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "yweb"
-version = "0.1.4"
+version = "0.1.5"
 description = "FastAPI基础类库，提供响应封装、中间件、ORM、认证、日志、Agent 内部工具调用协议等基础功能"
 readme = "README.md"
 license = { text = "MIT" }
