@@ -50,6 +50,8 @@
 
 ## 三、发布命令
 
+### 用脚本（推荐）
+
 在打包根目录（有 `pyproject.toml` 的那层）执行：
 
 ```powershell
@@ -63,10 +65,23 @@
 .\publish.ps1 -SkipUpload
 ```
 
-也可以手动执行等价步骤：
+脚本依次执行 5 步：
+
+| 步骤 | 动作 |
+|---|---|
+| [1/5] | 同步外层 `README.md` 到打包根目录（外层为唯一来源） |
+| [2/5] | 清理 `dist/`、`build/`、`yweb.egg-info/` |
+| [3/5] | `python -m build` 生成 wheel + sdist |
+| [4/5] | 验证产物存在、文件名与版本号一致 |
+| [5/5] | `twine upload` 上传（`-SkipUpload` 时跳过） |
+
+### 手动执行等价步骤
 
 ```powershell
 cd yweb-core/yweb-core
+
+# 同步外层 README（外层是唯一来源）
+copy ..\README.md .\README.md
 
 # 清理旧产物
 rmdir /s /q dist
@@ -84,6 +99,15 @@ python -m twine upload --config-file .pypirc dist/*
 # 或者上传到 testpypi
 python -m twine upload --repository testpypi dist/*
 ```
+
+### 关于 README.md（两份，必须一致）
+
+| 位置 | 角色 |
+|---|---|
+| 外层 `yweb-core/README.md`（仓库根） | **唯一来源**，所有修改都在这里做 |
+| 内层 `yweb-core/yweb-core/README.md`（打包根） | 构建时自动从外层同步，**不要直接改** |
+
+PyPI 展示的 README 取自**打包根目录**那一份，所以要保证它和外层内容一致。不要直接改内层，否则下次发布会把你改的内容覆盖掉。
 
 ### 产物验证
 
