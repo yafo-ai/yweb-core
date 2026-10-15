@@ -211,6 +211,10 @@ def event_before_insert_generate_pk(mapper, connection, target):
     if strategy is None:
         strategy = PrimaryKeyConfig.get_strategy()
 
+    # 自增主键由数据库在 INSERT 时生成，无需在 Python 侧生成或执行去重查询
+    if strategy == IdType.AUTO_INCREMENT:
+        return
+
     # 如果主键已经有值，不生成
     if target.id is not None:
         return
