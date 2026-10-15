@@ -76,6 +76,8 @@ Furion的CORS主要解决：
     )
 21 缓存模块提供查询已经缓存数据的 接口
 
+22 类型标注完备性：0.1.5 加入了 py.typed（PEP 561 类型标记），对外承诺"标注可信"，但内部标注是"覆盖面广、未追求严格完备"。当前安全（缺标注处降级为 Any，不会报假错），但存在 150 处 `Optional` 误用、若干函数缺返回值标注、mypy 未开严格模式。详见 @TODO/TYPE_ANNOTATION_COMPLETENESS_RECORD.md
+
 
 前端 框架 ：
 https://ui.mantine.dev/ 
