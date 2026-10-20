@@ -187,3 +187,24 @@ class TestPrimaryKeyConfigAndGeneratorsExtraMore:
         assert generator.generate_with_retry(model, lambda: "Z") == "Z"
         assert sess.entered == 1
         assert sess.rolled_back == 1  # 查询异常触发 SAVEPOINT 回滚
+
+    def test_before_insert_skips_auto_increment_strategy(self, monkeypatch):
+        """自增主键策略下，before_insert 事件直接返回，不调用 generate_with_retry 查询数据库。"""
+        from yweb.orm.id_model import event_before_insert_generate_pk
+
+        PrimaryKeyConfig.reset()
+        called = []
+        monkeypatch.setattr(
+            PrimaryKeyGenerator,
+            "generate_with_retry",
+            lambda *args, **kwargs: called.append(True),
+        )
+        target_cls = type("AutoIncModel", (), {"__pk_strategy__": IdType.AUTO_INCREMENT})
+        target = target_cls()
+        target.id = None
+
+        event_before_insert_generate_pk(None, None, target)
+
+        assert called == []
+        assert target.id is None
+
