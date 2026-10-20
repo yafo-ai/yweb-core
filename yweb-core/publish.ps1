@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     构建并发布 yweb 到 PyPI（或 testpypi）。
 
@@ -47,8 +47,8 @@ if (-not $versionLine) {
     exit 1
 }
 $version = $versionLine.Matches[0].Groups[1].Value
-Write-Host "📦 版本号: $version" -ForegroundColor Cyan
-Write-Host "🎯 目标仓库: $Repo" -ForegroundColor Cyan
+Write-Host "版本号: $version" -ForegroundColor Cyan
+Write-Host "目标仓库: $Repo" -ForegroundColor Cyan
 
 if (-not $SkipUpload -and -not (Test-Path $pypirc)) {
     Write-Error "找不到 .pypirc 文件。请在 $root\.pypirc 中配置 $Repo 的 token。"
@@ -91,7 +91,8 @@ foreach ($dir in @("dist", "build", "yweb.egg-info")) {
 Write-Host "`n[3/5] 构建 wheel + sdist..." -ForegroundColor Yellow
 Push-Location $root
 try {
-    python -m build 2>&1 | ForEach-Object { Write-Host $_ }
+    # 用 cmd /c 在系统层合并 stderr，避免 PowerShell 把进度输出当作异常
+    cmd /c "python -m build 2>&1"
     if ($LASTEXITCODE -ne 0) {
         Write-Error "构建失败，退出码: $LASTEXITCODE"
         exit 1
@@ -111,8 +112,8 @@ if (-not $wheel -or -not $sdist) {
     exit 1
 }
 
-Write-Host "  ✅ $($wheel.Name)  ($([math]::Round($wheel.Length / 1KB, 1)) KB)"
-Write-Host "  ✅ $($sdist.Name)  ($([math]::Round($sdist.Length / 1KB, 1)) KB)"
+Write-Host "  [OK] $($wheel.Name)  ($([math]::Round($wheel.Length / 1KB, 1)) KB)"
+Write-Host "  [OK] $($sdist.Name)  ($([math]::Round($sdist.Length / 1KB, 1)) KB)"
 
 # 版本一致性检查
 $expectedWheel = "yweb-$version-py3-none-any.whl"
@@ -122,7 +123,7 @@ if ($wheel.Name -ne $expectedWheel) {
 
 # ---------- 5. 上传 ----------
 if ($SkipUpload) {
-    Write-Host "`n⏭️  跳过上传（-SkipUpload）" -ForegroundColor DarkGray
+    Write-Host "`n跳过上传（-SkipUpload）" -ForegroundColor DarkGray
     Write-Host "    产物在 $distDir"
     exit 0
 }
@@ -131,7 +132,7 @@ Write-Host "`n[5/5] 上传到 $Repo..." -ForegroundColor Yellow
 Push-Location $root
 try {
     $repoArg = if ($Repo -eq "testpypi") { "--repository testpypi" } else { "" }
-    python -m twine upload --config-file .pypirc $repoArg dist/* 2>&1 | ForEach-Object { Write-Host $_ }
+    cmd /c "python -m twine upload --config-file .pypirc $repoArg dist/* 2>&1"
     if ($LASTEXITCODE -ne 0) {
         Write-Error "上传失败，退出码: $LASTEXITCODE"
         exit 1
@@ -140,10 +141,10 @@ try {
     Pop-Location
 }
 
-Write-Host "`n🎉 yweb $version 已发布到 $Repo！" -ForegroundColor Green
+Write-Host "`n完成: yweb $version 已发布到 $Repo" -ForegroundColor Green
 $publishUrl = if ($Repo -eq "testpypi") {
     "https://test.pypi.org/project/yweb/$version/"
 } else {
     "https://pypi.org/project/yweb/$version/"
 }
-Write-Host "🔗 $publishUrl" -ForegroundColor Green
+Write-Host "链接: $publishUrl" -ForegroundColor Green

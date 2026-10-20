@@ -2,6 +2,11 @@
 
 本文件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.1.6] - 2026-10-15
+
+### 修复
+- 修复自增主键策略下 `before_insert` 事件重复处理主键的问题：`IdType.AUTO_INCREMENT` 时直接返回，由数据库在 INSERT 时生成主键，避免 Python 侧重复生成和多余的唯一性查询
+
 ## [0.1.5] - 2026-10-15
 
 项目首次发布到 PyPI。
